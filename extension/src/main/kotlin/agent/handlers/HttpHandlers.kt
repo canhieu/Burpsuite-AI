@@ -226,9 +226,9 @@ class HttpHandlers(private val ctx: AgentContext) : RpcHandler {
      * Relay a request through the Burp proxy listener so it lands in HTTP History
      * (Montoya's sendRequest bypasses the proxy and never hits history).
      * HTTPS: CONNECT tunnel + TLS with a trust-all socket manager (Burp MITM).
+     * Reuses a pooled keep-alive tunnel per host to avoid CONNECT+TLS churn.
      */
     private fun sendViaProxy(raw: RawHttpMessage, service: HttpService): HttpRequestResponse {
-        val (ph, pp) = proxyRelayTarget()
         val startLine = raw.startLine.trim()
         val method = startLine.substringBefore(' ')
         val path = startLine.substringAfter(' ', "").substringBefore(' ')
@@ -236,8 +236,6 @@ class HttpHandlers(private val ctx: AgentContext) : RpcHandler {
         val port = service.port()
         val secure = service.secure()
 
-        val connectHost = if (secure) "$host:$port" else host
-        val connectLine = if (secure) "CONNECT $connectHost HTTP/1.1\r\nHost: $connectHost\r\n\r\n".toByteArray() else null
         val target = if (path.startsWith("http://") || path.startsWith("https://")) path else path
         val scheme = if (secure) "https" else "http"
         val authority = when {
@@ -260,20 +258,80 @@ class HttpHandlers(private val ctx: AgentContext) : RpcHandler {
                 append(requestLine).append("\r\n")
                 for (h in raw.headers) {
                     if (h.name.equals("Content-Length", true)) continue
+                    if (h.name.equals("Connection", true)) continue
                     append(h.name).append(": ").append(h.value).append("\r\n")
                 }
                 append("Content-Length: ").append(body.size).append("\r\n")
-                append("Connection: close\r\n\r\n")
+                append("Connection: keep-alive\r\n\r\n")
             }
             text.toByteArray(Charsets.ISO_8859_1)
         }
 
+        val poolKey = "$host:$port:${if (secure) "s" else "p"}"
+        var attempt = 0
+        var respBytes: ByteArray
+        var reusable = true
+        while (true) {
+            val conn = borrow(poolKey, host, port, secure)
+            try {
+                val out = conn.socket.getOutputStream()
+                out.write(headerBytes)
+                out.write(body)
+                out.flush()
+                val parsed = readResponseFramed(DataInputStream(conn.socket.getInputStream()))
+                respBytes = parsed.bytes
+                reusable = parsed.reusable
+                break
+            } catch (e: Exception) {
+                invalidate(poolKey, conn)
+                if (attempt++ >= 1) throw RpcFailure(502, "proxy relay failed: ${e.message}")
+                // retry once with a fresh connection
+            }
+        }
+        return HttpRequestResponse.httpRequestResponse(
+            HttpBridge.request(raw, service),
+            HttpResponse.httpResponse(burp.api.montoya.core.ByteArray.byteArray(*respBytes)),
+        )
+    }
+
+    private class PooledConn(val socket: Socket, val lock: Any)
+
+    private val connPool = java.util.concurrent.ConcurrentHashMap<String, PooledConn>()
+    private val poolLock = Any()
+
+    private fun borrow(key: String, host: String, port: Int, secure: Boolean): PooledConn {
+        val existing = connPool[key]
+        if (existing != null) {
+            synchronized(existing.lock) {
+                if (!existing.socket.isClosed) return existing
+                connPool.remove(key, existing)
+            }
+        }
+        synchronized(poolLock) {
+            // re-check after acquiring global lock to avoid double-create
+            connPool[key]?.let { if (!it.socket.isClosed) return it }
+            val fresh = PooledConn(openProxyTunnel(host, port, secure), Any())
+            connPool[key] = fresh
+            return fresh
+        }
+    }
+
+    private fun invalidate(key: String, conn: PooledConn) {
+        synchronized(conn.lock) {
+            if (connPool.get(key) === conn) connPool.remove(key, conn)
+            runCatching { conn.socket.close() }
+        }
+    }
+
+    private fun openProxyTunnel(host: String, port: Int, secure: Boolean): Socket {
+        val (ph, pp) = proxyRelayTarget()
         val socket = Socket()
-        socket.connect(InetSocketAddress(ph, pp), 15000)
-        socket.soTimeout = 60000
-        val out: OutputStream = socket.getOutputStream()
-        if (connectLine != null) {
-            out.write(connectLine)
+        socket.connect(InetSocketAddress(ph, pp), 10000)
+        socket.soTimeout = 30000
+        if (secure) {
+            val connectHost = "$host:$port"
+            val out = socket.getOutputStream()
+            out.write("CONNECT $connectHost HTTP/1.1\r\nHost: $connectHost\r\n\r\n".toByteArray(Charsets.ISO_8859_1))
             out.flush()
             val in0 = DataInputStream(socket.getInputStream())
             val connectResp = readUntilHeaders(in0)
@@ -282,32 +340,14 @@ class HttpHandlers(private val ctx: AgentContext) : RpcHandler {
                 socket.close()
                 throw RpcFailure(502, "proxy CONNECT failed: $status")
             }
-        }
-        out.write(headerBytes)
-        out.write(body)
-        out.flush()
-
-        val sslSocket: Socket = if (secure) {
             val ctx = SSLContext.getInstance("TLS")
             ctx.init(null, arrayOf<TrustManager>(TRUST_ALL), SecureRandom())
             val s = ctx.socketFactory.createSocket(socket, host, port, true) as SSLSocket
-            s.soTimeout = 60000
+            s.soTimeout = 30000
             s.startHandshake()
-            s
-        } else {
-            socket
+            return s
         }
-
-        val respBytes = try {
-            readResponse(DataInputStream(sslSocket.getInputStream()))
-        } finally {
-            runCatching { sslSocket.close() }
-            runCatching { socket.close() }
-        }
-        return HttpRequestResponse.httpRequestResponse(
-            HttpBridge.request(raw, service),
-            HttpResponse.httpResponse(burp.api.montoya.core.ByteArray.byteArray(*respBytes)),
-        )
+        return socket
     }
 
     private fun readUntilHeaders(input: DataInputStream): String {
@@ -341,63 +381,107 @@ class HttpHandlers(private val ctx: AgentContext) : RpcHandler {
         return out.toByteArray()
     }
 
-    private fun readResponse(input: DataInputStream): ByteArray {
+    private class Framed(val bytes: ByteArray, val reusable: Boolean)
+
+    /** Reads exactly one HTTP response frame so a keep-alive stream stays positioned for the next request. */
+    private fun readResponseFramed(input: DataInputStream): Framed {
         val head = readUntilHeaders(input)
         val headBytes = head.toByteArray(Charsets.ISO_8859_1)
         val headerBlock = head.substringBefore("\r\n\r\n")
-        val bodyStart = head.indexOf("\r\n\r\n") + 4
+        val headEnd = head.indexOf("\r\n\r\n") + 4
         val out = ByteArrayOutputStream()
-        out.write(headBytes)
+        out.write(headBytes, 0, minOf(headEnd, headBytes.size))
+
         val contentLength = headerBlock.lines()
             .firstOrNull { it.lowercase().startsWith("content-length:") }
             ?.substringAfter(":")
             ?.trim()
             ?.toIntOrNull()
         val chunked = headerBlock.lines().any { it.lowercase().startsWith("transfer-encoding:") && it.lowercase().contains("chunked") }
+        val connClose = headerBlock.lines().any { it.lowercase().startsWith("connection:") && it.lowercase().contains("close") }
+
+        // bytes already buffered past the header from the readUntilHeaders() oversized read
+        val pending = if (headEnd <= headBytes.size) headBytes.copyOfRange(headEnd, headBytes.size) else ByteArray(0)
+
         if (chunked) {
-            // decode chunked body; rewrite headers to fixed Content-Length
-            val headEnd = head.indexOf("\r\n\r\n") + 4
-            val pending = headBytes.copyOfRange(headEnd, headBytes.size)
-            out.write(headBytes, 0, headEnd)
             val bodyOut = ByteArrayOutputStream()
             bodyOut.write(pending)
-            // drain rest from socket, decode chunks
-            val rest = ByteArrayOutputStream()
-            val buf = ByteArray(16384)
-            while (true) {
-                val n = try { input.read(buf) } catch (_: java.net.SocketTimeoutException) { break }
-                if (n < 0) break
-                rest.write(buf, 0, n)
-            }
-            bodyOut.write(rest.toByteArray())
-            val decoded = decodeChunked(bodyOut.toByteArray())
-            // emit as content-length style body (headers still say chunked; acceptable for history display)
-            out.write(decoded)
-        } else if (contentLength != null) {
-            val total = contentLength + 4
-            var remaining = contentLength
-            if (bodyStart < headBytes.size && headBytes.size > bodyStart) {
-                remaining -= (headBytes.size - bodyStart)
-                out.write(headBytes, bodyStart, headBytes.size - bodyStart)
-            }
-            val buf = ByteArray(8192)
-            while (remaining > 0) {
-                val n = input.read(buf)
-                if (n < 0) break
-                val take = minOf(n, remaining)
-                out.write(buf, 0, take)
-                remaining -= take
-            }
-        } else {
-            // no body declared; read to close
-            val buf = ByteArray(16384)
-            while (true) {
-                val n = try { input.read(buf) } catch (_: java.net.SocketTimeoutException) { break }
-                if (n < 0) break
-                out.write(buf, 0, n)
-            }
+            drainChunked(input, bodyOut)
+            out.write(decodeChunked(bodyOut.toByteArray()))
+            return Framed(out.toByteArray(), !connClose)
         }
-        return out.toByteArray()
+        if (contentLength != null) {
+            var remaining = contentLength - pending.size
+            if (remaining > 0) {
+                if (pending.isNotEmpty()) out.write(pending)
+                val buf = ByteArray(8192)
+                while (remaining > 0) {
+                    val n = input.read(buf)
+                    if (n < 0) break
+                    val take = minOf(n, remaining)
+                    out.write(buf, 0, take)
+                    remaining -= take
+                }
+            } else {
+                if (pending.isNotEmpty()) out.write(pending)
+            }
+            return Framed(out.toByteArray(), !connClose)
+        }
+        if (headerBlock.lines().firstOrNull()?.contains(" 204 ") == true ||
+            headerBlock.lines().firstOrNull()?.contains(" 304 ") == true ||
+            headerBlock.lines().firstOrNull()?.startsWith("HTTP/1.1 1") == true
+        ) {
+            return Framed(out.toByteArray(), !connClose)
+        }
+        // no framing info: read to close, not reusable
+        if (pending.isNotEmpty()) out.write(pending)
+        val buf = ByteArray(16384)
+        while (true) {
+            val n = try { input.read(buf) } catch (_: java.net.SocketTimeoutException) { break }
+            if (n < 0) break
+            out.write(buf, 0, n)
+        }
+        return Framed(out.toByteArray(), false)
+    }
+
+    /** Consumes chunked body frames (incl. terminating 0 chunk + trailers) so the stream is reusable. */
+    private fun drainChunked(input: DataInputStream, out: ByteArrayOutputStream) {
+        while (true) {
+            val sizeLine = readLineBytes(input) ?: break
+            val sizeHex = String(sizeLine, Charsets.ISO_8859_1).trim().substringBefore(';')
+            val size = sizeHex.toIntOrNull(16) ?: break
+            if (size == 0) {
+                // consume trailers until blank line
+                while (true) {
+                    val t = readLineBytes(input) ?: break
+                    if (t.isEmpty()) break
+                }
+                break
+            }
+            val chunk = ByteArray(size)
+            var off = 0
+            while (off < size) {
+                val n = input.read(chunk, off, size - off)
+                if (n < 0) break
+                off += n
+            }
+            out.write(chunk, 0, off)
+            readLineBytes(input) // trailing CRLF
+        }
+    }
+
+    private fun readLineBytes(input: DataInputStream): ByteArray? {
+        val line = ByteArrayOutputStream()
+        var prev = -1
+        while (true) {
+            val b = try { input.read() } catch (_: java.net.SocketTimeoutException) { return null }
+            if (b < 0) return null
+            if (prev == '\r'.code && b == '\n'.code) {
+                return line.toByteArray().let { it.copyOfRange(0, maxOf(0, it.size - 1)) }
+            }
+            prev = b
+            line.write(b)
+        }
     }
 
     companion object {

@@ -28,7 +28,7 @@ class RpcServer(
         const val VERSION = "0.1.0"
     }
 
-    private val pool = Executors.newFixedThreadPool(4) { r ->
+    private val pool = Executors.newFixedThreadPool(16) { r ->
         Thread(r, "burp-agent-rpc").apply { isDaemon = true }
     }
     private val requestIds = AtomicLong(1)
