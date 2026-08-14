@@ -15,10 +15,13 @@ import javax.swing.BorderFactory
 import javax.swing.Box
 import javax.swing.BoxLayout
 import javax.swing.JButton
+import javax.swing.JCheckBox
+import javax.swing.JComboBox
 import javax.swing.JComponent
 import javax.swing.JLabel
 import javax.swing.JOptionPane
 import javax.swing.JPanel
+import javax.swing.JPasswordField
 import javax.swing.JScrollPane
 import javax.swing.JSplitPane
 import javax.swing.JTabbedPane
@@ -49,6 +52,24 @@ class AgentTab(private val ctx: AgentContext) {
     private val chatOutput = JTextPane()
     private val logModel = LogTableModel(ctx.audit)
 
+    // Settings tab: provider rows
+    private data class ProviderRow(val name: String, val label: String)
+    private val providerRows = listOf(
+        ProviderRow("openai", "OpenAI / Compatible"),
+        ProviderRow("anthropic", "Anthropic Claude"),
+        ProviderRow("deepseek", "DeepSeek"),
+        ProviderRow("ollama", "Ollama (local)"),
+    )
+    private val providerEnabled = providerRows.associate { it.name to JCheckBox() }
+    private val providerBaseUrl = providerRows.associate { it.name to JTextField(36) }
+    private val providerApiKey = providerRows.associate { it.name to JPasswordField(30) }
+    private val settingsStatus = JLabel("settings: -")
+
+    // Chat model selection
+    private val chatProviderCombo = JComboBox(arrayOf("openai", "anthropic", "deepseek", "ollama"))
+    private val chatModelCombo = JComboBox<String>()
+    private var chatModels: List<String> = emptyList()
+
     fun component(): JComponent = root
 
     init {
@@ -59,6 +80,7 @@ class AgentTab(private val ctx: AgentContext) {
 
         tabs.addTab("Status", buildStatusPanel())
         tabs.addTab("Chat", buildChatPanel())
+        tabs.addTab("Settings", buildSettingsPanel())
         tabs.addTab("Log", buildLogPanel())
         root.add(tabs, BorderLayout.CENTER)
         root.preferredSize = Dimension(920, 640)
@@ -207,13 +229,80 @@ class AgentTab(private val ctx: AgentContext) {
         val inputRow = JPanel(BorderLayout())
         inputRow.add(input, BorderLayout.CENTER)
         inputRow.add(sendButton, BorderLayout.EAST)
+
+        // Model selector row: provider + model (loaded via models.list)
+        chatModelCombo.isEditable = true
+        chatModelCombo.prototypeDisplayValue = "gpt-5.1-codex"
+        chatProviderCombo.addActionListener { refreshChatModels() }
+        chatModelCombo.addActionListener { persistChatModelSelection() }
+        val modelRow = JPanel(FlowLayout(FlowLayout.LEFT, 8, 2))
+        modelRow.add(JLabel("provider:"))
+        modelRow.add(chatProviderCombo)
+        modelRow.add(JLabel("model:"))
+        modelRow.add(chatModelCombo)
+
         val split = JSplitPane(JSplitPane.VERTICAL_SPLIT, output, inputRow)
         split.resizeWeight = 0.85
         split.setContinuousLayout(true)
-        split.dividerLocation = 480
+        split.dividerLocation = 430
         val panel = JPanel(BorderLayout())
+        panel.add(modelRow, BorderLayout.NORTH)
         panel.add(split, BorderLayout.CENTER)
         return panel
+    }
+
+    private fun refreshChatModels() {
+        val rpc = ctx.rpcServer ?: return
+        val provider = chatProviderCombo.selectedItem?.toString() ?: "openai"
+        Thread {
+            val reply = rpc.callSidecar("models.list", Json.obj("provider" to provider), timeoutMs = 15000)
+            if (reply.error != null || reply.result == null) return@Thread
+            val models = reply.result.asJsonObject.get("models")?.takeIf { it.isJsonArray }?.asJsonArray ?: return@Thread
+            val ids = models.mapNotNull { it.takeIf { e -> e.isJsonObject }?.asJsonObject?.get("id")?.takeIf { x -> !x.isJsonNull }?.asString }
+            SwingUtilities.invokeLater {
+                val prev = chatModelCombo.editor.item?.toString() ?: ""
+                chatModelCombo.removeAllItems()
+                for (id in ids) chatModelCombo.addItem(id)
+                if (ids.isNotEmpty() && prev.isNotEmpty() && ids.contains(prev)) {
+                    chatModelCombo.selectedItem = prev
+                }
+            }
+        }.apply { isDaemon = true; name = "models-list" }.start()
+    }
+
+    private fun persistChatModelSelection() {
+        val rpc = ctx.rpcServer ?: return
+        val model = chatModelCombo.editor.item?.toString() ?: chatModelCombo.selectedItem?.toString() ?: return
+        val provider = chatProviderCombo.selectedItem?.toString() ?: "openai"
+        Thread {
+            rpc.callSidecar(
+                "settings.set",
+                Json.obj("patch" to com.google.gson.JsonObject().apply {
+                    addProperty("chat.provider", provider)
+                    addProperty("chat.model", model)
+                }),
+                timeoutMs = 8000,
+            )
+        }.apply { isDaemon = true; name = "settings-chat-model" }.start()
+    }
+
+    private fun loadChatModelSelection() {
+        val rpc = ctx.rpcServer ?: return
+        Thread {
+            val reply = rpc.callSidecar("settings.get", Json.obj("paths" to listOf("chat.provider", "chat.model")), timeoutMs = 10000)
+            if (reply.error != null || reply.result == null) return@Thread
+            val settings = reply.result.asJsonObject.get("settings")?.takeIf { it.isJsonObject }?.asJsonObject ?: return@Thread
+            val provider = settings.get("chat.provider")?.takeIf { !it.isJsonNull }?.asString
+            val model = settings.get("chat.model")?.takeIf { !it.isJsonNull }?.asString
+            SwingUtilities.invokeLater {
+                if (provider != null && providerRows.any { it.name == provider }) {
+                    chatProviderCombo.selectedItem = provider
+                }
+                if (model != null && !model.isBlank()) {
+                    chatModelCombo.selectedItem = model
+                }
+            }
+        }.apply { isDaemon = true; name = "settings-load-chat" }.start()
     }
 
     private fun buildLogPanel(): JComponent {
@@ -222,6 +311,102 @@ class AgentTab(private val ctx: AgentContext) {
         table.fillsViewportHeight = true
         val scroll = JScrollPane(table)
         return scroll
+    }
+
+    private fun buildSettingsPanel(): JComponent {
+        val panel = JPanel()
+        panel.layout = BoxLayout(panel, BoxLayout.Y_AXIS)
+        panel.border = BorderFactory.createEmptyBorder(10, 12, 12, 12)
+
+        // ---- Providers card ----
+        val card = JPanel()
+        card.layout = BoxLayout(card, BoxLayout.Y_AXIS)
+        card.border = BorderFactory.createTitledBorder("Providers (Base URL + API Key)")
+        val header = JPanel(FlowLayout(FlowLayout.LEFT, 8, 2))
+        header.add(JLabel("On"))
+        header.add(JLabel("Provider"))
+        header.add(JLabel("Base URL"))
+        header.add(JLabel("API Key"))
+        card.add(header)
+        for (row in providerRows) {
+            val line = JPanel(FlowLayout(FlowLayout.LEFT, 8, 3))
+            val en = providerEnabled.getValue(row.name)
+            en.toolTipText = "Enable ${row.name} provider"
+            line.add(en)
+            line.add(JLabel(row.label).apply { preferredSize = Dimension(150, 20) })
+            line.add(providerBaseUrl.getValue(row.name).apply { preferredSize = Dimension(420, 24) })
+            line.add(providerApiKey.getValue(row.name).apply { preferredSize = Dimension(260, 24) })
+            card.add(line)
+        }
+        val saveBtn = JButton("Save provider settings")
+        saveBtn.addActionListener { saveProviderSettings() }
+        val reloadBtn = JButton("Load current")
+        reloadBtn.addActionListener { loadProviderSettings() }
+        val btnRow = JPanel(FlowLayout(FlowLayout.LEFT, 8, 4))
+        btnRow.add(saveBtn)
+        btnRow.add(reloadBtn)
+        btnRow.add(settingsStatus)
+        card.add(btnRow)
+        panel.add(card)
+        panel.add(Box.createVerticalStrut(10))
+
+        // ---- Help hint ----
+        val hint = JLabel("<html>Base URL is the OpenAI-compatible endpoint, e.g. <b>https://api.shineshop.dev/v1</b>.<br>" +
+            "Global API Key is the provider key for that endpoint (stored in the sidecar data dir, mode 0600)." +
+            "<br>Leave API Key empty to clear. Keys in the environment (OPENAI_API_KEY) still take precedence.</html>")
+        hint.font = hint.font.deriveFont(Font.PLAIN, 11f)
+        panel.add(hint)
+
+        return JScrollPane(panel)
+    }
+
+    private fun loadProviderSettings() {
+        val rpc = ctx.rpcServer ?: return
+        Thread {
+            val reply = rpc.callSidecar("config.get", null, timeoutMs = 10000)
+            if (reply.error != null || reply.result == null || !reply.result.isJsonObject) {
+                settingsStatus.text = "settings: load failed"
+                return@Thread
+            }
+            val providers = reply.result.asJsonObject.get("providers")?.takeIf { it.isJsonObject }?.asJsonObject
+                ?: return@Thread
+            SwingUtilities.invokeLater {
+                for (name in providerRows.map { it.name }) {
+                    val p = providers.get(name)?.takeIf { it.isJsonObject }?.asJsonObject ?: continue
+                    providerEnabled.getValue(name).isSelected = p.get("enabled")?.asBoolean == true
+                    providerBaseUrl.getValue(name).text = p.get("baseUrl")?.takeIf { !it.isJsonNull }?.asString ?: ""
+                    providerApiKey.getValue(name).text = ""
+                }
+                settingsStatus.text = "settings: loaded"
+            }
+        }.apply { isDaemon = true; name = "settings-load" }.start()
+    }
+
+    private fun saveProviderSettings() {
+        val rpc = ctx.rpcServer ?: run {
+            settingsStatus.text = "settings: sidecar not connected"
+            return
+        }
+        val providers = com.google.gson.JsonObject()
+        for (name in providerRows.map { it.name }) {
+            val p = com.google.gson.JsonObject()
+            p.addProperty("enabled", providerEnabled.getValue(name).isSelected)
+            p.addProperty("baseUrl", providerBaseUrl.getValue(name).text.trim())
+            val key = String(providerApiKey.getValue(name).password)
+            p.addProperty("apiKey", key)
+            providers.add(name, p)
+        }
+        Thread {
+            val reply = rpc.callSidecar("config.set", Json.obj("providers" to providers), timeoutMs = 15000)
+            SwingUtilities.invokeLater {
+                if (reply.error != null) {
+                    settingsStatus.text = "settings: save failed: ${reply.error.message}"
+                } else {
+                    settingsStatus.text = "settings: saved"
+                    refreshProviders()
+                }
+            }
+        }.apply { isDaemon = true; name = "settings-save" }.start()
     }
 
     private fun sendChat() {
@@ -236,6 +421,8 @@ class AgentTab(private val ctx: AgentContext) {
         val params = Json.obj(
             "messages" to listOf(Json.obj("role" to "user", "content" to text)),
             "stream" to true,
+            "provider" to (chatProviderCombo.selectedItem?.toString() ?: "openai"),
+            "model" to (chatModelCombo.editor.item?.toString() ?: chatModelCombo.selectedItem?.toString() ?: ""),
         )
         Thread {
             val reply = rpc.callSidecar("agent.chat", params, timeoutMs = 120000)
@@ -342,6 +529,9 @@ class AgentTab(private val ctx: AgentContext) {
             startButton.isEnabled = false
             stopButton.isEnabled = true
             refreshProviders()
+            refreshChatModels()
+            loadChatModelSelection()
+            loadProviderSettings()
         }
     }
 

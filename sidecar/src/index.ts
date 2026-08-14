@@ -9,6 +9,7 @@ import type { Services } from "./handlers/types.js"
 import { lifecycleHandlers } from "./handlers/lifecycle.js"
 import { authHandlers } from "./handlers/auth.js"
 import { settingsHandlers } from "./handlers/settings.js"
+import { configHandlers } from "./handlers/config.js"
 import { modelsHandlers } from "./handlers/models.js"
 import { payloadHandlers } from "./handlers/payloads.js"
 import { oobHandlers } from "./handlers/oob.js"
@@ -38,7 +39,7 @@ export async function buildSidecar(config = loadConfig()) {
   log("info", `store backend: ${store.backend}`)
   const auth = createAuthManager(config)
   initAuthManager(auth)
-  const registry = await createProviderRegistry(config, {
+  let registry = await createProviderRegistry(config, {
     resolveToken: async (provider) => {
       try {
         if (auth.hasApiKey(provider as "openai" | "anthropic")) return undefined
@@ -63,6 +64,20 @@ export async function buildSidecar(config = loadConfig()) {
         return []
       }
     },
+    rebuildRegistry: async () => {
+      const rebuilt = await createProviderRegistry(config, {
+        resolveToken: async (provider) => {
+          try {
+            if (auth.hasApiKey(provider as "openai" | "anthropic")) return undefined
+            return await auth.accessToken(provider as "openai" | "anthropic")
+          } catch {
+            return undefined
+          }
+        },
+      })
+      registry = rebuilt
+      services.registry = rebuilt
+    },
   }
 
   const handlers = new Map<string, Handler>()
@@ -70,6 +85,7 @@ export async function buildSidecar(config = loadConfig()) {
     lifecycleHandlers(),
     authHandlers(),
     settingsHandlers(),
+    configHandlers(),
     modelsHandlers(),
     payloadHandlers(),
     oobHandlers(),

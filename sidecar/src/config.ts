@@ -4,6 +4,8 @@ import { resolve } from "node:path"
 export interface ProviderConfig {
   enabled: boolean
   apiKeyEnv?: string
+  /** Runtime-stored API key (set via UI). Takes precedence over apiKeyEnv. */
+  apiKey?: string
   baseUrl: string
 }
 
@@ -49,9 +51,9 @@ export interface SidecarConfig {
 }
 
 const DEFAULT_ROLES: SidecarConfig["models"]["roles"] = {
-  planner: { provider: "openai", model: "gpt-4o" },
-  executor: { provider: "openai", model: "gpt-4o-mini" },
-  reviewer: { provider: "openai", model: "gpt-4o" },
+  planner: { provider: "openai", model: "gpt-5.1-codex" },
+  executor: { provider: "openai", model: "gpt-5.1-codex-mini" },
+  reviewer: { provider: "openai", model: "gpt-5.1-codex" },
   fast: { provider: "deepseek", model: "deepseek-chat" },
 }
 
@@ -76,7 +78,7 @@ const DEFAULT_CONFIG: SidecarConfig = {
   oauth: {
     openai: {
       issuer: "https://auth.openai.com",
-      clientId: "codex_cli_7tGxSIrWQdoyuPXD",
+      clientId: "app_EMoamEEZ73f0CkXaXp7hrann",
       scope: "openid email profile offline_access model.request model_install",
       tokenEndpoint: "https://auth.openai.com/oauth/token",
       deviceEndpoint: "https://auth.openai.com/oauth/device/code",
@@ -119,11 +121,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, cwd = process.c
     }
   }
 
+  // Resolve dataDir early so runtime overrides (config.overrides.json) can merge in.
+  const rawDataDir = raw.dataDir !== undefined ? String(raw.dataDir) : DEFAULT_CONFIG.dataDir
+  const dataDir = resolve(cwd, rawDataDir)
+
   const cfg = structuredClone(DEFAULT_CONFIG)
   if (raw.host !== undefined) cfg.host = String(raw.host)
   if (raw.port !== undefined) cfg.port = Number(raw.port)
   if (raw.authToken !== undefined) cfg.authToken = String(raw.authToken)
-  if (raw.dataDir !== undefined) cfg.dataDir = String(raw.dataDir)
+  if (raw.dataDir !== undefined) cfg.dataDir = dataDir
+  else cfg.dataDir = dataDir
   if (raw.localOnly !== undefined) cfg.localOnly = Boolean(raw.localOnly)
   if (raw.logging) {
     if (raw.logging.level) cfg.logging.level = raw.logging.level
@@ -163,7 +170,51 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, cwd = process.c
     cfg.oauth = { openai: { ...cfg.oauth?.openai, ...raw.oauth.openai }, anthropic: { ...cfg.oauth?.anthropic, ...raw.oauth.anthropic } }
   }
 
+  // Runtime overrides (written by config.set from the extension UI) take final precedence.
+  const overrides = loadOverrides(dataDir)
+  if (overrides.providers) {
+    for (const [name, p] of Object.entries(overrides.providers)) {
+      const base = cfg.providers[name] ?? { enabled: false, baseUrl: "" }
+      cfg.providers[name] = {
+        ...base,
+        ...p,
+        enabled: p.enabled ?? base.enabled,
+        baseUrl: p.baseUrl ?? base.baseUrl,
+        apiKey: p.apiKey !== undefined ? p.apiKey : base.apiKey,
+        apiKeyEnv: p.apiKeyEnv !== undefined ? p.apiKeyEnv : base.apiKeyEnv,
+      }
+    }
+  }
+
   return cfg
+}
+
+export interface ProviderOverrides {
+  providers?: Record<string, Partial<ProviderConfig>>
+}
+
+export function overridesFilePath(dataDir: string): string {
+  return resolve(dataDir, "config.overrides.json")
+}
+
+export function loadOverrides(dataDir: string): ProviderOverrides {
+  const f = overridesFilePath(dataDir)
+  const raw = loadFile(f)
+  if (!raw) return {}
+  const providers: Record<string, Partial<ProviderConfig>> = {}
+  if (raw.providers && typeof raw.providers === "object") {
+    for (const [name, p] of Object.entries(raw.providers)) {
+      if (p && typeof p === "object") {
+        const out: Partial<ProviderConfig> = {}
+        if (typeof p.enabled === "boolean") out.enabled = p.enabled
+        if (typeof p.baseUrl === "string") out.baseUrl = p.baseUrl
+        if (typeof p.apiKey === "string") out.apiKey = p.apiKey
+        if (typeof p.apiKeyEnv === "string") out.apiKeyEnv = p.apiKeyEnv
+        if (Object.keys(out).length > 0) providers[name] = out
+      }
+    }
+  }
+  return { providers }
 }
 
 const API_KEY_ENVS = ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "DEEPSEEK_API_KEY"] as const
@@ -173,4 +224,14 @@ export function resolveApiKey(envName: string | undefined, env: NodeJS.ProcessEn
   if (!(API_KEY_ENVS as readonly string[]).includes(envName)) return undefined
   const v = env[envName]
   return v && v.length > 0 ? v : undefined
+}
+
+/** Effective key for a provider: env var first, then the runtime-stored apiKey. */
+export function providerApiKey(cfg: SidecarConfig, provider: string): string | undefined {
+  const p = cfg.providers[provider]
+  if (!p) return undefined
+  const fromEnv = resolveApiKey(p.apiKeyEnv)
+  if (fromEnv) return fromEnv
+  if (p.apiKey && p.apiKey.length > 0) return p.apiKey
+  return undefined
 }

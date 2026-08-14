@@ -11,6 +11,8 @@ export interface Services {
   sidecarVersion: string
   log: (level: "debug" | "info" | "warn" | "error", msg: string, meta?: unknown) => void
   getProviderStatuses: () => Promise<import("../types.js").ProviderStatus[]>
+  /** Rebuild provider adapters from the current in-memory config (for config.set). */
+  rebuildRegistry?: () => void | Promise<void>
 }
 
 export interface RpcContext {

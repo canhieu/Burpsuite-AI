@@ -1,6 +1,6 @@
 import type { ModelInfo, ProviderStatus } from "./types.js"
 import type { SidecarConfig } from "./config.js"
-import { resolveApiKey } from "./config.js"
+import { providerApiKey } from "./config.js"
 
 export type { ProviderStatus }
 
@@ -86,6 +86,10 @@ export async function createProviderRegistry(
       if (rest.length > 0) {
         return { id: rest.join("/"), provider: maybeProvider }
       }
+      if (norm === "latest-codex") {
+        const openaiAdapter = adapters.get("openai")
+        return { id: "gpt-5.1-codex", provider: "openai", displayName: openaiAdapter ? undefined : undefined, contextWindow: 400000 }
+      }
       const byProvider = adapters.get(maybeProvider)
       if (byProvider) {
         const roleMatch = Object.entries(config.models.roles).find(([, r]) => r.provider === maybeProvider)
@@ -126,7 +130,7 @@ export async function createProviderRegistry(
 }
 
 const DEFAULT_MODELS: Record<string, string[]> = {
-  openai: ["gpt-4o", "gpt-4o-mini"],
+  openai: ["gpt-5.1-codex", "gpt-5.1-codex-mini", "latest-codex"],
   anthropic: ["claude-sonnet-4-5", "claude-3-7-sonnet-latest", "claude-3-5-haiku-latest"],
   deepseek: ["deepseek-chat", "deepseek-reasoner"],
   ollama: ["llama3.1", "qwen2.5", "mistral"],
@@ -282,12 +286,20 @@ class OpenAIAdapter implements ProviderAdapter {
     const c = config.providers["openai"]
     this.config = config
     this.baseUrl = c?.baseUrl ?? "https://api.openai.com/v1"
-    this.hasKey = !!resolveApiKey(c?.apiKeyEnv)
+    this.hasKey = !!providerApiKey(config, "openai")
     this.resolveToken = resolveToken
   }
 
   private get key(): string | undefined {
-    return resolveApiKey(this.config.providers["openai"]?.apiKeyEnv)
+    return providerApiKey(this.config, "openai")
+  }
+
+  /** True when we are using an OAuth (ChatGPT/Codex subscription) session, not an API key. */
+  private async isOAuthSession(): Promise<boolean> {
+    if (this.key) return false
+    if (!this.resolveToken) return false
+    const tok = await this.resolveToken("openai")
+    return !!tok
   }
 
   private async authHeader(): Promise<Record<string, string>> {
@@ -301,11 +313,28 @@ class OpenAIAdapter implements ProviderAdapter {
   }
 
   async *stream(messages: ChatMessage[], model: string, opts?: StreamOptions): AsyncGenerator<ProviderEvent> {
+    if (await this.isOAuthSession()) {
+      const headers = await this.authHeader()
+      const token = headers["Authorization"]?.slice(7) ?? ""
+      const codexModel = codexModelFor(model, this.config)
+      yield* openAiResponsesStream(this.baseUrl, token, messages, codexModel, opts)
+      return
+    }
     const headers = await this.authHeader()
     yield* openAiCompatibleStream(this.baseUrl, headers["Authorization"]?.slice(7), messages, model, opts)
   }
 
   async listModels(): Promise<ModelInfo[]> {
+    if (await this.isOAuthSession()) {
+      // ChatGPT-subscription tokens cannot list models via /v1/models (403).
+      const extras = this.config.models.openai?.extra ?? []
+      const codexModels = CODEX_MODELS
+      const def = this.config.models.openai?.default && codexModels.includes(this.config.models.openai!.default!)
+        ? this.config.models.openai!.default!
+        : CODEX_MODELS[0]
+      const ids = [def, ...extras.filter((m) => m !== def), ...codexModels.filter((m) => m !== def && !extras.includes(m))]
+      return ids.map((m) => modelInfo(m, "openai", { contextWindow: 400000 }))
+    }
     try {
       const headers = await this.authHeader()
       const res = await fetch(`${this.baseUrl}/models`, { headers })
@@ -320,6 +349,11 @@ class OpenAIAdapter implements ProviderAdapter {
   }
 
   async healthCheck(): Promise<boolean> {
+    if (await this.isOAuthSession()) {
+      // /v1/models 403s for subscription tokens; a session presence + token is our health signal.
+      const headers = await this.authHeader()
+      return !!headers["Authorization"]
+    }
     try {
       const headers = await this.authHeader()
       const res = await fetch(`${this.baseUrl}/models`, {
@@ -333,6 +367,155 @@ class OpenAIAdapter implements ProviderAdapter {
   }
 }
 
+/** Codex models usable with ChatGPT-subscription OAuth tokens via the Responses API. */
+const CODEX_MODELS = ["gpt-5.1-codex", "gpt-5-codex", "gpt-5.1-codex-mini", "o3", "latest-codex"]
+
+function codexModelFor(requested: string, config: SidecarConfig): string {
+  const def = config.models.openai?.default ?? ""
+  const cands = [requested, def, "gpt-5.1-codex"]
+  for (const c of cands) {
+    if (c && (CODEX_MODELS.includes(c) || c === "latest-codex")) return c
+  }
+  return "gpt-5.1-codex"
+}
+
+/**
+ * Stream against OpenAI's Responses API (used by Codex CLI with ChatGPT-subscription
+ * OAuth tokens). Handles response.output_text.delta + tool calls.
+ */
+async function* openAiResponsesStream(
+  baseUrl: string,
+  token: string,
+  messages: ChatMessage[],
+  model: string,
+  opts?: StreamOptions,
+): AsyncGenerator<ProviderEvent> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${token}`,
+  }
+  // Map ChatMessage[] to Responses API input items.
+  const input: unknown[] = messages.map((m) => {
+    if (m.role === "system") return { role: "system", content: [{ type: "input_text", text: m.content }] }
+    if (m.role === "assistant") return { role: "assistant", content: [{ type: "output_text", text: m.content }] }
+    if (m.role === "tool") {
+      return { type: "function_call_output", call_id: m.toolCallId ?? "call_0", output: m.content }
+    }
+    return { role: "user", content: [{ type: "input_text", text: m.content }] }
+  })
+
+  const body: Record<string, unknown> = {
+    model,
+    input,
+    stream: true,
+  }
+  if (opts?.maxTokens) body["max_output_tokens"] = opts.maxTokens
+  if (opts?.tools && Array.isArray(opts.tools) && opts.tools.length > 0) {
+    body["tools"] = opts.tools
+  }
+
+  let res: Response
+  try {
+    res = await fetch(`${baseUrl}/responses`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+      signal: opts?.signal,
+    })
+  } catch (e) {
+    yield { type: "error", data: { message: `openai responses: ${(e as Error).message}` } }
+    return
+  }
+  if (!res.ok) {
+    let detail = ""
+    try {
+      detail = JSON.stringify(await res.json())
+    } catch {
+      detail = await res.text()
+    }
+    yield { type: "error", data: { message: `provider error ${res.status}: ${detail.slice(0, 500)}` } }
+    return
+  }
+
+  const toolNames = new Map<string, string>()
+  const toolArgs = new Map<string, string>()
+  const emitted = new Set<string>()
+
+  for await (const raw of streamSse(res.body, opts?.signal)) {
+    let evt: Record<string, unknown>
+    try {
+      evt = JSON.parse(raw)
+    } catch {
+      continue
+    }
+    const type = evt["type"] as string
+    if (type === "response.output_text.delta") {
+      const delta = evt["delta"]
+      if (typeof delta === "string" && delta) yield { type: "text", data: delta }
+    } else if (type === "response.output_item.added") {
+      const item = evt["item"] as Record<string, unknown> | undefined
+      if (item && item["type"] === "function_call") {
+        const id = String(item["id"] ?? "")
+        const name = String(item["name"] ?? "")
+        if (id && name) toolNames.set(id, name)
+        const args = String(item["arguments"] ?? "")
+        if (id && args) toolArgs.set(id, (toolArgs.get(id) ?? "") + args)
+      }
+    } else if (type === "response.output_item.done") {
+      const item = evt["item"] as Record<string, unknown> | undefined
+      if (item && item["type"] === "function_call") {
+        const id = String(item["id"] ?? "")
+        const name = String(item["name"] ?? "")
+        const args = String(item["arguments"] ?? toolArgs.get(id) ?? "")
+        if (id && name) toolNames.set(id, name)
+        if (id && !emitted.has(id)) {
+          emitted.add(id)
+          let parsedArgs: unknown = args
+          try {
+            parsedArgs = JSON.parse(args)
+          } catch {
+            /* keep string */
+          }
+          yield { type: "tool_call", data: { id, name, arguments: parsedArgs } }
+        }
+      }
+    } else if (type === "response.function_call_arguments.delta") {
+      const id = String(evt["item_id"] ?? "")
+      const delta = evt["delta"]
+      if (typeof delta === "string" && id) toolArgs.set(id, (toolArgs.get(id) ?? "") + delta)
+    } else if (type === "response.function_call_arguments.done") {
+      const id = String(evt["item_id"] ?? "")
+      const args = String(evt["arguments"] ?? toolArgs.get(id) ?? "")
+      if (id && !emitted.has(id)) {
+        emitted.add(id)
+        let parsedArgs: unknown = args
+        try {
+          parsedArgs = JSON.parse(args)
+        } catch {
+          /* keep string */
+        }
+        yield { type: "tool_call", data: { id, name: toolNames.get(id) ?? "unknown", arguments: parsedArgs } }
+      }
+    } else if (type === "response.completed") {
+      yield { type: "done", data: { finishReason: "complete" } }
+      return
+    } else if (type === "response.failed") {
+      const resp = evt["response"] as Record<string, unknown> | undefined
+      const err = resp?.["error"] as Record<string, unknown> | undefined
+      yield { type: "error", data: { message: String(err?.["message"] ?? "responses request failed") } }
+      return
+    }
+  }
+  // Flush any pending tool calls not finished with a .done event.
+  for (const [id, name] of toolNames) {
+    if (!emitted.has(id)) {
+      emitted.add(id)
+      yield { type: "tool_call", data: { id, name, arguments: (() => { try { return JSON.parse(toolArgs.get(id) ?? "") } catch { return toolArgs.get(id) ?? "" } })() } }
+    }
+  }
+  yield { type: "done", data: { finishReason: "stop" } }
+}
+
 class DeepSeekAdapter implements ProviderAdapter {
   readonly provider = "deepseek"
   readonly baseUrl: string
@@ -341,11 +524,11 @@ class DeepSeekAdapter implements ProviderAdapter {
   constructor(private config: SidecarConfig) {
     const c = config.providers["deepseek"]
     this.baseUrl = c?.baseUrl ?? "https://api.deepseek.com/v1"
-    this.hasKey = !!resolveApiKey(c?.apiKeyEnv)
+    this.hasKey = !!providerApiKey(config, "deepseek")
   }
 
   private get key(): string | undefined {
-    return resolveApiKey(this.config.providers["deepseek"]?.apiKeyEnv)
+    return providerApiKey(this.config, "deepseek")
   }
 
   async *stream(messages: ChatMessage[], model: string, opts?: StreamOptions): AsyncGenerator<ProviderEvent> {
@@ -433,12 +616,12 @@ class AnthropicAdapter implements ProviderAdapter {
     const c = config.providers["anthropic"]
     this.config = config
     this.baseUrl = c?.baseUrl ?? "https://api.anthropic.com/v1"
-    this.hasKey = !!resolveApiKey(c?.apiKeyEnv)
+    this.hasKey = !!providerApiKey(config, "anthropic")
     this.resolveToken = resolveToken
   }
 
   private get key(): string | undefined {
-    return resolveApiKey(this.config.providers["anthropic"]?.apiKeyEnv)
+    return providerApiKey(this.config, "anthropic")
   }
 
   private async headers(): Promise<Record<string, string>> {
