@@ -68,6 +68,7 @@ class AgentContext(val api: MontoyaApi) {
         sendNotification = { m, p -> rpcServer?.sendNotification(m, p) }
     )
     val globalIssues = CopyOnWriteArrayList<AuditIssue>()
+    val analysis = AnalysisCollector(this)
 
     @Volatile var connected: Boolean = false
         private set

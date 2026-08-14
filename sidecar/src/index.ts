@@ -20,6 +20,8 @@ import { findingHandlers } from "./handlers/findings.js"
 import { evidenceHandlers } from "./handlers/evidence.js"
 import { reportHandlers } from "./handlers/report.js"
 import { chatHandlers } from "./handlers/chat.js"
+import { analysisHandlers } from "./handlers/analysis.js"
+import { AnalysisEngine } from "./analysis/analyzer.js"
 import { registerRunHandlers } from "./handlers/run-handler.js"
 import { createAuthManager } from "./auth/manager.js"
 import { initAuthManager } from "./handlers/auth.js"
@@ -105,14 +107,17 @@ export async function buildSidecar(config = loadConfig()) {
   const rpc = new RpcServer(config, services, logger, handlers, SIDECAR_VERSION)
   rpc.attach(server)
 
+  const analysisEngine = new AnalysisEngine(services.registry, config, (method, params) => rpc.emit(method, params), log)
+  for (const [method, handler] of Object.entries(analysisHandlers(analysisEngine))) handlers.set(method, handler)
+
   const { group: runHandlers } = registerRunHandlers(rpc, { services, handlers })
   for (const [method, handler] of Object.entries(runHandlers)) handlers.set(method, handler)
 
-  return { config, services, store, registry, server, rpc, handlers }
+  return { config, services, store, registry, server, rpc, handlers, analysisEngine }
 }
 
 async function main(): Promise<void> {
-  const { config, server, rpc, services } = await buildSidecar()
+  const { config, server, rpc, services, analysisEngine } = await buildSidecar()
   const host = config.host
   const port = config.port
 
@@ -130,6 +135,7 @@ async function main(): Promise<void> {
 
   const shutdown = (signal: string) => {
     services.log("info", `received ${signal}, shutting down`)
+    analysisEngine.shutdown()
     rpc.stop()
     rpc.close()
     server.close(() => process.exit(0))

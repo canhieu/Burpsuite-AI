@@ -51,6 +51,7 @@ class AgentTab(private val ctx: AgentContext) {
     private val chatInput = JTextArea(4, 80)
     private val chatOutput = JTextPane()
     private val logModel = LogTableModel(ctx.audit)
+    private val analysisTab = AnalysisTab(ctx)
 
     // Settings tab: provider rows
     private data class ProviderRow(val name: String, val label: String)
@@ -89,11 +90,13 @@ class AgentTab(private val ctx: AgentContext) {
 
         tabs.addTab("Status", buildStatusPanel())
         tabs.addTab("Chat", buildChatPanel())
+        tabs.addTab("Analysis", analysisTab.component())
         tabs.addTab("Settings", buildSettingsPanel())
         tabs.addTab("Log", buildLogPanel())
         root.add(tabs, BorderLayout.CENTER)
         root.preferredSize = Dimension(920, 640)
         ctx.api.userInterface().applyThemeToComponent(root)
+        ctx.analysis.addListener { analysisTab.addSignal(it) }
     }
 
     private fun buildStatusPanel(): JComponent {
@@ -670,6 +673,7 @@ class AgentTab(private val ctx: AgentContext) {
                 }
             }
             "auth.status.changed" -> SwingUtilities.invokeLater { renderProviders(params) }
+            "analysis.entry" -> analysisTab.onEntry(params)
             "approval.requested" -> promptApproval(params)
             "tool.call" -> {
                 val name = params.get("toolCall")?.takeIf { !it.isJsonNull && it.isJsonObject }?.asJsonObject?.get("name")?.asString ?: "?"

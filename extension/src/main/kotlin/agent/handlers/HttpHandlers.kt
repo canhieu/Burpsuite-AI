@@ -108,6 +108,7 @@ class HttpHandlers(private val ctx: AgentContext) : RpcHandler {
         val respJson = respRaw?.let { HttpJson.toJson(it, redacted) }
         val statusCode = rr.response()?.statusCode()
         ctx.logRpc("http.send", targetUrl, statusCode?.toString() ?: "no-response")
+        ctx.analysis.capture(raw, respRaw, targetUrl, method)
         return Json.obj(
             "ref" to HttpJson.messageRef(ctx.projectId, "agent", storeId),
             "statusCode" to statusCode,
