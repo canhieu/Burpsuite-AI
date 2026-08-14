@@ -426,16 +426,18 @@ class AgentTab(private val ctx: AgentContext) {
             return
         }
         val params = Json.obj(
-            "messages" to listOf(Json.obj("role" to "user", "content" to text)),
-            "stream" to true,
-            "provider" to (chatProviderCombo.selectedItem?.toString() ?: "openai"),
-            "model" to (chatModelCombo.editor.item?.toString() ?: chatModelCombo.selectedItem?.toString() ?: ""),
-            "reasoning" to (chatReasoningCombo.selectedItem?.toString()?.takeIf { it != "auto" } ?: ""),
+            "task" to text,
+            "mode" to "smart",
+            "models" to Json.obj(
+                "planner" to (chatProviderCombo.selectedItem?.toString() ?: "deepseek"),
+                "executor" to (chatProviderCombo.selectedItem?.toString() ?: "deepseek"),
+                "reviewer" to (chatProviderCombo.selectedItem?.toString() ?: "deepseek"),
+            ),
         )
         Thread {
-            val reply = rpc.callSidecar("agent.chat", params, timeoutMs = 120000)
+            val reply = rpc.callSidecar("agent.run.start", params, timeoutMs = 30000)
             if (reply.error != null) {
-                appendChat("system", "error", "agent.chat: ${reply.error.message}")
+                appendChat("system", "error", "agent.run.start: ${reply.error.message}")
             }
         }.apply { isDaemon = true; name = "agent-chat" }.start()
     }
@@ -603,6 +605,21 @@ class AgentTab(private val ctx: AgentContext) {
             }
             "auth.status.changed" -> SwingUtilities.invokeLater { renderProviders(params) }
             "approval.requested" -> promptApproval(params)
+            "tool.call" -> {
+                val name = params.get("toolCall")?.takeIf { !it.isJsonNull && it.isJsonObject }?.asJsonObject?.get("name")?.asString ?: "?"
+                appendChat("tool", "tool", name)
+            }
+            "run.progress" -> {
+                val msg = params.get("message")?.takeIf { !it.isJsonNull }?.asString ?: ""
+                val done = params.get("done")?.asBoolean == true
+                if (done) {
+                    SwingUtilities.invokeLater { flushStream() }
+                    if (msg.isNotEmpty() && !msg.startsWith("error")) appendChat("run", "done", msg)
+                    else if (msg.startsWith("error")) appendChat("run", "error", msg)
+                } else if (msg.isNotEmpty()) {
+                    appendChat("run", "done", msg)
+                }
+            }
             else -> {
             }
         }

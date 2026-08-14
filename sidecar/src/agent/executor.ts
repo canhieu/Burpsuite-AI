@@ -327,6 +327,7 @@ async function callModel(
   messages: ChatMessage[],
   opts: { model?: string },
   signal: AbortSignal,
+  ctx?: Pick<ExecutorContext, "runId" | "cb">,
 ): Promise<ModelOutput> {
   let text = ""
   let tokens = 0
@@ -338,6 +339,7 @@ async function callModel(
   for await (const ev of iter) {
     if (ev.type === "text") {
       text += String(ev.data)
+      if (ctx) ctx.cb.emit("agent.event", { runId: ctx.runId, type: "text", data: String(ev.data) })
     } else if (ev.type === "tool_call") {
       const d = ev.data as { name?: string; arguments?: string | Record<string, unknown> }
       if (d && d.name) {
@@ -392,7 +394,7 @@ export async function runExecutor(ctx: ExecutorContext): Promise<ExecutorResult>
 
     let output: ModelOutput
     try {
-      output = await callModel(ctx.model, buildMessages(ctx, history), modelOpt, ctx.signal)
+      output = await callModel(ctx.model, buildMessages(ctx, history), modelOpt, ctx.signal, ctx)
     } catch (err) {
       if (ctx.signal.aborted) {
         state.status = "cancelled"
