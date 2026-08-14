@@ -1,0 +1,57 @@
+id: scan-check-author
+version: "1.0.0"
+name: BCheck / Scan Check Author
+description: Write BChecks and custom ScanChecks from a request + hypothesis, register them, and drive a scoped audit. All writes require explicit approval.
+triggers:
+  - "write a bcheck"
+  - "author a scan check"
+  - "create a custom check"
+  - "register bcheck"
+tools:
+  allow:
+    - selected.get
+    - history.get
+    - history.search
+    - bchecks.register
+    - scan.check.register
+    - scan.crawl
+    - scan.audit
+    - scan.add_requests
+    - scan.task_status
+    - scan.stop
+    - finding.create
+  deny:
+    - http.send
+    - http.batch
+    - http.race
+    - mutate.apply
+    - oob.session
+    - oob.poll
+    - scope.add
+    - scope.remove
+    - config.import
+    - proxy.set_intercept
+    - mcp.call
+    - vault.set
+    - vault.delete
+    - notify.send
+limits:
+  requests: 100
+  durationSeconds: 3600
+  concurrency: 1
+  maxCostUsd: 0.2
+modelPreference: strong
+authRequired: anon
+approvalPolicy: approval
+workflow: |
+  1. Read the selected request and state a testable hypothesis (condition + expected signal).
+  2. Write a BCheck definition (or a ScanCheck active/passive logic) matching the hypothesis.
+  3. Present the definition to the human for approval (approvalPolicy: approval).
+  4. On approval, register with `bchecks.register` or `scan.check.register`.
+  5. Run a scoped `scan.audit` on the target endpoint(s); monitor `scan.task_status`.
+  6. Review results, refine the check, repeat up to the budget. `scan.stop` when done.
+prompt: |
+  You author BChecks and ScanChecks from requests and hypotheses. Writing and
+  registering checks and launching scans all require explicit human approval.
+  Produce deterministic, evidence-checked check logic; refine iteratively from
+  scan results. Stop when the budget is spent.

@@ -1,0 +1,55 @@
+id: history-triage
+version: "1.0.0"
+name: History Triage
+description: Group proxy history endpoints, flag anomalies, and prioritize candidates. Read-only.
+triggers:
+  - "triage history"
+  - "group endpoints"
+  - "find anomalies in history"
+  - "what is interesting in history"
+  - "prioritize candidates"
+tools:
+  allow:
+    - history.search
+    - history.get
+    - history.inventory
+    - history.websockets
+    - selected.get
+    - logger.read
+  deny:
+    - http.send
+    - http.batch
+    - http.race
+    - mutate.preview
+    - mutate.apply
+    - oob.session
+    - oob.poll
+    - scan.crawl
+    - scan.audit
+    - scope.add
+    - scope.remove
+    - config.import
+    - proxy.set_intercept
+    - mcp.call
+    - vault.set
+    - vault.delete
+    - notify.send
+limits:
+  requests: 200
+  durationSeconds: 900
+  concurrency: 2
+  maxCostUsd: 0.1
+modelPreference: fast
+authRequired: anon
+approvalPolicy: auto
+workflow: |
+  1. Build endpoint inventory via `history.inventory` (optionally scoped to one host).
+  2. Group by route shape: method + normalized path (ids -> :id).
+  3. Flag anomalies: non-standard status mixes, sensitive paths (admin, debug, internal),
+     endpoints returning 200 for error inputs, large bodies, missing auth on mutating routes.
+  4. Pull bodies with `history.get` only for high-value candidates (lazy).
+  5. Output a ranked triage table with candidate refs. No requests are sent.
+prompt: |
+  You triage proxy history. Read-only: never send requests. Group by endpoint,
+  flag anomalies (sensitive paths, odd status mixes, missing auth), and rank
+  candidates for deeper hunting. Output a concise ranked table with refs.

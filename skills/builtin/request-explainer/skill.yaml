@@ -1,0 +1,57 @@
+id: request-explainer
+version: "1.0.0"
+name: Request / Response Explainer
+description: Explain and analyze a single HTTP request and response. Read-only.
+triggers:
+  - "explain this request"
+  - "what does this request do"
+  - "analyze this response"
+  - "why did this return 403"
+  - "explain selected"
+tools:
+  allow:
+    - selected.get
+    - history.get
+    - history.search
+    - logger.read
+    - payload.encode
+  deny:
+    - http.send
+    - http.batch
+    - http.race
+    - mutate.preview
+    - mutate.apply
+    - oob.session
+    - oob.poll
+    - scan.crawl
+    - scan.audit
+    - scan.check.register
+    - bchecks.register
+    - scope.add
+    - scope.remove
+    - config.import
+    - proxy.set_intercept
+    - mcp.call
+    - vault.set
+    - vault.delete
+    - notify.send
+limits:
+  requests: 50
+  durationSeconds: 600
+  concurrency: 1
+  maxCostUsd: 0.05
+modelPreference: fast
+authRequired: anon
+approvalPolicy: auto
+workflow: |
+  1. Fetch the selected request via `selected.get` (or `history.get` given a ref).
+  2. Fetch the paired response body when present.
+  3. Read related history entries via `history.search` for context (same host/path).
+  4. Explain: method, path, parameters, auth headers used, cookies, request body shape.
+  5. Explain the response: status meaning, headers of interest, body semantics.
+  6. Flag anomalies: missing auth on mutating endpoint, interesting headers, redirect behavior.
+  7. Never send requests. Output a structured explanation.
+prompt: |
+  You explain HTTP requests and responses for a bug bounty hunter. Read-only:
+  never send or mutate requests. Be precise, cite headers and status codes, and
+  flag security-relevant observations (auth, tokens, redirects, odd headers).

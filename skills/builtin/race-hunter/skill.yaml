@@ -1,0 +1,54 @@
+id: race-hunter
+version: "1.0.0"
+name: Race Condition Hunter
+description: Detect race conditions (double-spend, coupon stacking, OTP reuse) via http.race concurrent bursts and response differential. Sends requests automatically within scope and budget.
+triggers:
+  - "hunt race condition"
+  - "test race"
+  - "double spend"
+  - "coupon stacking"
+  - "race burst"
+tools:
+  allow:
+    - history.search
+    - history.get
+    - auth.switch_context
+    - mutate.preview
+    - mutate.apply
+    - http.send
+    - http.batch
+    - http.race
+    - finding.create
+  deny:
+    - scan.crawl
+    - scan.audit
+    - scan.check.register
+    - bchecks.register
+    - scope.add
+    - scope.remove
+    - config.import
+    - proxy.set_intercept
+    - mcp.call
+    - vault.set
+    - vault.delete
+    - notify.send
+limits:
+  requests: 600
+  durationSeconds: 1800
+  concurrency: 6
+  maxCostUsd: 0.4
+modelPreference: fast
+authRequired: dual
+approvalPolicy: auto
+workflow: |
+  1. Identify stateful actions: coupon redeem, gift card, transfer, OTP verify, signup, vote.
+  2. Build one base request via `mutate.preview`; confirm a benign result with `http.send`.
+  3. Fire `http.race` with count >= 10 identical requests (single-packet emulation).
+  4. Inspect `distinctResponses` and the result set for multiple successes.
+  5. Verify state impact (e.g. two successful redemptions) with a follow-up `http.get`-style check.
+  6. Create a finding only when the race yields >1 successful state-changing outcome.
+prompt: |
+  You detect race conditions on authorized endpoints using http.race bursts.
+  Evidence: more successful outcomes than permitted (2 redemptions, reused OTP,
+  double spend). Verify the resulting state, not just identical 200s. Use
+  reversible test actions where possible and clean up after yourself.

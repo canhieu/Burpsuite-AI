@@ -1,0 +1,11 @@
+.gradle/
+build/
+node_modules/
+dist/
+*.log
+.idea/
+*.iml
+.vscode/
+.DS_Store
+sidecar/data/
+*.local.db

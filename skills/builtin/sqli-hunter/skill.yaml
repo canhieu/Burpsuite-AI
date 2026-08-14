@@ -1,0 +1,58 @@
+id: sqli-hunter
+version: "1.0.0"
+name: SQL Injection Hunter
+description: Detect SQL injection via read-only probing with generated payloads and differential responses. Sends mutated requests automatically within scope and budget.
+triggers:
+  - "hunt sql injection"
+  - "test sqli"
+  - "sql injection"
+  - "is this parameter injectable"
+tools:
+  allow:
+    - history.search
+    - history.get
+    - payload.build
+    - payload.encode
+    - mutate.preview
+    - mutate.apply
+    - http.send
+    - http.batch
+    - oob.session
+    - oob.poll
+    - finding.create
+  deny:
+    - http.race
+    - scan.crawl
+    - scan.audit
+    - scan.check.register
+    - bchecks.register
+    - scope.add
+    - scope.remove
+    - config.import
+    - proxy.set_intercept
+    - mcp.call
+    - vault.set
+    - vault.delete
+    - notify.send
+limits:
+  requests: 400
+  durationSeconds: 1800
+  concurrency: 4
+  maxCostUsd: 0.3
+modelPreference: fast
+authRequired: anon
+approvalPolicy: auto
+workflow: |
+  1. Choose in-scope parameters from history triage / selected request.
+  2. Build payload set for the context with `payload.build` (class sqli).
+  3. Baseline the endpoint: send one clean request via `http.send`.
+  4. Probe with `mutate.apply` (or `http.send` + mutation): single quote, boolean
+     variants, error-based markers, time-based, and OOB via `oob.session` when blind.
+  5. Compare responses differentially (status, length, error text, timing).
+  6. For blind cases, `oob.poll` for a DNS/HTTP interaction as mandatory proof.
+  7. Record a candidate via `finding.create` only when a clear signal is confirmed.
+prompt: |
+  You detect SQL injection on authorized endpoints. Read-only probing: only
+  non-destructive payloads (quotes, booleans, error markers, OOB). Auto-approved
+  sends within scope and budget. Confirm before reporting: differential signal or
+  OOB interaction. Never blind-exploit with destructive queries.

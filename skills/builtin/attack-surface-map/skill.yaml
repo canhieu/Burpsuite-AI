@@ -1,0 +1,55 @@
+id: attack-surface-map
+version: "1.0.0"
+name: Attack Surface Map
+description: Build an endpoint inventory and attack-surface map from history and site map. Read-only.
+triggers:
+  - "map the attack surface"
+  - "endpoint inventory"
+  - "what endpoints exist"
+  - "attack surface"
+tools:
+  allow:
+    - history.inventory
+    - history.search
+    - history.get
+    - history.websockets
+    - site_map.list
+    - scope.get
+    - logger.read
+  deny:
+    - http.send
+    - http.batch
+    - http.race
+    - mutate.preview
+    - mutate.apply
+    - oob.session
+    - oob.poll
+    - scan.crawl
+    - scan.audit
+    - scope.add
+    - scope.remove
+    - config.import
+    - proxy.set_intercept
+    - mcp.call
+    - vault.set
+    - vault.delete
+    - notify.send
+limits:
+  requests: 300
+  durationSeconds: 900
+  concurrency: 2
+  maxCostUsd: 0.1
+modelPreference: fast
+authRequired: anon
+approvalPolicy: auto
+workflow: |
+  1. Read current scope with `scope.get`.
+  2. Build inventory with `history.inventory`; complement with `site_map.list`.
+  3. Merge and dedup endpoints by method + normalized path.
+  4. Classify each endpoint: auth requirement, data access (read/write), file-like, redirect, websocket.
+  5. Note authentication contexts observed (`authContexts`).
+  6. Output the endpoint map with counts and feature labels.
+prompt: |
+  You map the attack surface from history and site map. Read-only: never send
+  requests. Produce a deduped endpoint inventory with methods, auth contexts,
+  and feature labels, highlighting high-value targets (auth, upload, admin).

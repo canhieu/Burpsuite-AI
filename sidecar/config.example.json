@@ -1,0 +1,18 @@
+{
+  "host": "127.0.0.1",
+  "port": 8570,
+  "authToken": "change-me",
+  "dataDir": "data",
+  "providers": {
+    "openai": { "enabled": true, "apiKeyEnv": "OPENAI_API_KEY", "baseUrl": "https://api.openai.com/v1" },
+    "anthropic": { "enabled": true, "apiKeyEnv": "ANTHROPIC_API_KEY", "baseUrl": "https://api.anthropic.com/v1" },
+    "deepseek": { "enabled": true, "apiKeyEnv": "DEEPSEEK_API_KEY", "baseUrl": "https://api.deepseek.com/v1" },
+    "ollama": { "enabled": true, "baseUrl": "http://127.0.0.1:11434/v1" }
+  },
+  "localOnly": false,
+  "notifications": {
+    "telegram": { "botTokenEnv": "TELEGRAM_BOT_TOKEN", "chatIdEnv": "TELEGRAM_CHAT_ID" },
+    "webhook": { "urlEnv": "AGENT_WEBHOOK_URL" }
+  },
+  "logging": { "level": "info", "redactSecrets": true }
+}

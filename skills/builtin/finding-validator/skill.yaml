@@ -1,0 +1,55 @@
+id: finding-validator
+version: "1.0.0"
+name: Finding Validator
+description: Deterministic 7-question validation gate for candidate findings before reporting. Read-only.
+triggers:
+  - "validate this finding"
+  - "is this finding valid"
+  - "run the 7 questions"
+  - "check the finding"
+tools:
+  allow:
+    - finding.list
+    - evidence.export
+    - history.get
+    - history.search
+  deny:
+    - http.send
+    - http.batch
+    - http.race
+    - mutate.preview
+    - mutate.apply
+    - oob.session
+    - oob.poll
+    - scan.crawl
+    - scan.audit
+    - scope.add
+    - scope.remove
+    - config.import
+    - proxy.set_intercept
+    - mcp.call
+    - vault.set
+    - vault.delete
+    - notify.send
+    - report.generate
+limits:
+  requests: 100
+  durationSeconds: 600
+  concurrency: 1
+  maxCostUsd: 0.05
+modelPreference: fast
+authRequired: anon
+approvalPolicy: auto
+workflow: |
+  1. Read the candidate finding via `finding.list` (filter by id/status).
+  2. Export evidence with `evidence.export` for the finding.
+  3. Run the deterministic 7-question gate against the evidence:
+     Q1 in scope, Q2 reachable, Q3 root cause clear, Q4 proof shown
+     (differential/OOB/timing), Q5 not self-inflicted, Q6 real-world impact
+     (no self-XSS / no own-data only), Q7 evidence matches the claim.
+  4. Answer each yes/no with the supporting evidence line.
+  5. Verdict: validated (all yes) or rejected (any no), with reasons.
+prompt: |
+  You are a deterministic finding validator. Apply the 7-question gate strictly;
+  one "no" rejects the finding. Never invent evidence, never extrapolate
+  impact the evidence does not show. Read-only: no requests, no reports.

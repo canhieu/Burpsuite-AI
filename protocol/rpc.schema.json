@@ -1,0 +1,145 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "BurpAgent JSON-RPC 2.0 protocol",
+  "description": "Contract between Burp extension (client) and Node sidecar (server) over WebSocket. All messages are JSON-RPC 2.0. Methods namespaced as agent.*, history.*, http.*, payload.*, oob.*, scan.*, bchecks.*, finding.*, evidence.*, auth.*, vault.*, mcp.*, notify.*, settings.*, config.*, proxy.*, scope.*, task_engine.*. Server may push notifications (id=null) for events: agent.event, run.progress, tool.call, finding.updated, approval.requested, auth.status.changed.",
+  "definitions": {
+    "rpcRequest": {
+      "type": "object",
+      "required": ["jsonrpc", "method", "id"],
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "type": ["number", "string"] },
+        "method": { "type": "string" },
+        "params": { "type": "object" }
+      }
+    },
+    "rpcNotification": {
+      "type": "object",
+      "required": ["jsonrpc", "method"],
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "method": { "type": "string" },
+        "params": { "type": "object" }
+      }
+    },
+    "rpcResponse": {
+      "type": "object",
+      "required": ["jsonrpc", "id"],
+      "properties": {
+        "jsonrpc": { "const": "2.0" },
+        "id": { "type": ["number", "string"] },
+        "result": {},
+        "error": {
+          "type": "object",
+          "required": ["code", "message"],
+          "properties": {
+            "code": { "type": "integer" },
+            "message": { "type": "string" },
+            "data": {}
+          }
+        }
+      }
+    },
+    "handshake": {
+      "type": "object",
+      "required": ["projectId", "nonce", "token"],
+      "properties": {
+        "projectId": { "type": "string" },
+        "nonce": { "type": "string" },
+        "token": { "type": "string" }
+      }
+    },
+    "messageRef": {
+      "type": "object",
+      "required": ["projectId", "source", "id"],
+      "properties": {
+        "projectId": { "type": "string" },
+        "source": { "enum": ["proxy", "siteMap", "agent", "websocket"] },
+        "id": { "type": ["number", "string"] },
+        "digest": { "type": "string" }
+      }
+    },
+    "httpMessage": {
+      "type": "object",
+      "required": ["startLine", "headers"],
+      "properties": {
+        "startLine": { "type": "string" },
+        "headers": { "type": "object", "additionalProperties": { "type": "string" } },
+        "body": { "type": "string" },
+        "bodyOffset": { "type": "integer" },
+        "bodyTruncated": { "type": "boolean" }
+      }
+    },
+    "redactedHttpMessage": { "$ref": "#/definitions/httpMessage" },
+    "toolCall": {
+      "type": "object",
+      "required": ["name", "arguments"],
+      "properties": {
+        "name": { "type": "string" },
+        "arguments": { "type": "object" },
+        "idempotencyKey": { "type": "string" }
+      }
+    },
+    "toolResult": {
+      "type": "object",
+      "properties": {
+        "ok": { "type": "boolean" },
+        "result": {},
+        "error": { "type": "string" },
+        "idempotencyKey": { "type": "string" }
+      }
+    },
+    "finding": {
+      "type": "object",
+      "required": ["id", "title", "vulnClass", "severity", "confidence", "status"],
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "vulnClass": { "type": "string" },
+        "severity": { "enum": ["info", "low", "medium", "high", "critical"] },
+        "confidence": { "enum": ["tentative", "medium", "high", "certain"] },
+        "status": { "enum": ["candidate", "validated", "confirmed", "rejected", "duplicate"] },
+        "chain": { "type": "array", "items": { "type": "string" } },
+        "skill": { "type": "string" },
+        "runId": { "type": "string" },
+        "program": { "type": "string" },
+        "assets": { "type": "array", "items": { "type": "string" } },
+        "evidence": { "type": "array", "items": { "type": "object" } }
+      }
+    },
+    "skillManifest": {
+      "type": "object",
+      "required": ["id", "version", "name"],
+      "properties": {
+        "id": { "type": "string" },
+        "version": { "type": "string" },
+        "name": { "type": "string" },
+        "description": { "type": "string" },
+        "triggers": { "type": "array", "items": { "type": "string" } },
+        "tools": {
+          "type": "object",
+          "properties": {
+            "allow": { "type": "array", "items": { "type": "string" } },
+            "deny": { "type": "array", "items": { "type": "string" } }
+          }
+        },
+        "limits": {
+          "type": "object",
+          "properties": {
+            "requests": { "type": "integer" },
+            "durationSeconds": { "type": "integer" },
+            "concurrency": { "type": "integer" },
+            "maxCostUsd": { "type": "number" }
+          }
+        },
+        "modelPreference": { "type": "string" },
+        "authRequired": { "enum": ["anon", "accountA", "accountB", "dual"] },
+        "approvalPolicy": { "enum": ["auto", "approval"] },
+        "scripts": { "type": "array", "items": { "type": "object" } },
+        "mcp": { "type": "array", "items": { "type": "string" } },
+        "workflow": { "type": "string" },
+        "prompt": { "type": "string" }
+      }
+    }
+  }
+}

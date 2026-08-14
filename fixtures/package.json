@@ -1,0 +1,26 @@
+{
+  "name": "burp-agent-fixtures",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "start-http": "node dist/index.js http --port 9000 --scenario normal",
+    "start-ws": "node dist/index.js ws --port 9001",
+    "test": "vitest run",
+    "validate-skills": "node scripts/validate-skills.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/ws": "^8.5.12",
+    "js-yaml": "^4.1.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.4",
+    "vitest": "^2.1.0"
+  }
+}

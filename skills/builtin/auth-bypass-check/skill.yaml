@@ -1,0 +1,57 @@
+id: auth-bypass-check
+version: "1.0.0"
+name: Authentication Bypass Check
+description: Probe authentication and authorization controls for bypasses (JWT, headers, context switching, HTTP method tricks). Detection only.
+triggers:
+  - "hunt auth bypass"
+  - "test authentication"
+  - "jwt bypass"
+  - "access control bypass"
+  - "can we bypass login"
+tools:
+  allow:
+    - history.search
+    - history.get
+    - payload.encode
+    - crypto.jwt.analyze
+    - crypto.jwt.forge
+    - auth.switch_context
+    - mutate.preview
+    - mutate.apply
+    - http.send
+    - http.batch
+    - finding.create
+  deny:
+    - http.race
+    - scan.crawl
+    - scan.audit
+    - scan.check.register
+    - bchecks.register
+    - scope.add
+    - scope.remove
+    - config.import
+    - proxy.set_intercept
+    - mcp.call
+    - vault.set
+    - vault.delete
+    - notify.send
+limits:
+  requests: 400
+  durationSeconds: 1800
+  concurrency: 3
+  maxCostUsd: 0.35
+modelPreference: fast
+authRequired: dual
+approvalPolicy: auto
+workflow: |
+  1. Fingerprint the auth mechanism from history (JWT header, cookie, session, basic).
+  2. For JWT: `crypto.jwt.analyze` the token; test alg confusion / signature stripping
+     with `crypto.jwt.forge` and send via `http.send`.
+  3. Test header-based auth spoofing (X-Forwarded-*, X-Original-URL) and method tricks.
+  4. Use `auth.switch_context` to compare anonymous vs authenticated behavior.
+  5. Only report a bypass that changes authorization outcome (403 -> 200 with data).
+prompt: |
+  You probe authentication/authorization bypasses on authorized endpoints.
+  Evidence is a real authorization outcome change (denied -> allowed with data).
+  JWT tests go through crypto.jwt.analyze/forge before sending. Never reset
+  passwords, lock accounts, or mutate shared auth state.

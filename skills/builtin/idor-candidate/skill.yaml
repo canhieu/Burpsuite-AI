@@ -1,0 +1,55 @@
+id: idor-candidate
+version: "1.0.0"
+name: IDOR / BOLA Candidate Hunter
+description: Detect insecure direct object references via two-account differential testing. Requires both auth contexts and uses http.send differentials.
+triggers:
+  - "hunt idor"
+  - "test idor"
+  - "insecure direct object reference"
+  - "two account differential"
+  - "access control"
+tools:
+  allow:
+    - history.search
+    - history.get
+    - auth.switch_context
+    - mutate.preview
+    - mutate.apply
+    - http.send
+    - http.batch
+    - tool.comparer.send
+    - finding.create
+  deny:
+    - http.race
+    - scan.crawl
+    - scan.audit
+    - scan.check.register
+    - bchecks.register
+    - scope.add
+    - scope.remove
+    - config.import
+    - proxy.set_intercept
+    - mcp.call
+    - vault.set
+    - vault.delete
+    - notify.send
+limits:
+  requests: 500
+  durationSeconds: 2400
+  concurrency: 4
+  maxCostUsd: 0.4
+modelPreference: fast
+authRequired: dual
+approvalPolicy: auto
+workflow: |
+  1. Read history for object endpoints (paths with :id, numeric ids).
+  2. Switch to accountA with `auth.switch_context` and fetch object N (owned).
+  3. Switch to accountB with `auth.switch_context` and fetch the same object N.
+  4. Compare owner-identifying fields in the bodies (differential via `http.send`).
+  5. If accountB sees accountA's data (distinct owner fields), that is an IDOR signal.
+  6. Send the two pairs to `tool.comparer.send` and record a candidate via `finding.create`.
+prompt: |
+  You detect IDOR with a two-account differential. Never infer from a single
+  response: fetch the same object as accountA and accountB and compare
+  owner-identifying data. Only a distinct-owner difference is a candidate.
+  Stay within scope and budget; use `auth.switch_context` for both contexts.

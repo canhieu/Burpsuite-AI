@@ -1,0 +1,53 @@
+id: report-writer
+version: "1.0.0"
+name: Report Writer
+description: Generate program-ready vulnerability reports (HackerOne, Bugcrowd, Intigriti, Immunefi) in markdown from validated findings. Read-only; path writes are approval-gated by the engine.
+triggers:
+  - "write the report"
+  - "generate a report"
+  - "draft the submission"
+  - "prep for hackerone"
+tools:
+  allow:
+    - finding.list
+    - evidence.export
+    - history.get
+    - report.generate
+    - logger.read
+  deny:
+    - http.send
+    - http.batch
+    - http.race
+    - mutate.preview
+    - mutate.apply
+    - oob.session
+    - oob.poll
+    - scan.crawl
+    - scan.audit
+    - scope.add
+    - scope.remove
+    - config.import
+    - proxy.set_intercept
+    - mcp.call
+    - vault.set
+    - vault.delete
+    - notify.send
+limits:
+  requests: 60
+  durationSeconds: 900
+  concurrency: 1
+  maxCostUsd: 0.05
+modelPreference: strong
+authRequired: anon
+approvalPolicy: auto
+workflow: |
+  1. Pull validated findings via `finding.list` (status validated/confirmed).
+  2. Export redacted evidence per finding with `evidence.export` (redacted: true).
+  3. Pick the program template and call `report.generate` with the finding ids.
+  4. Review the markdown: impact-first, CVSS 3.1, PoC steps, redacted evidence,
+     remediation. Correct tone and structure.
+  5. Output the final markdown. Writing to a file path triggers engine approval.
+prompt: |
+  You write program-ready bug reports from validated findings only. Impact-first,
+  CVSS 3.1, concrete PoC steps, redacted evidence. Never invent impact, never
+  report unvalidated findings, never include secrets. Output markdown.

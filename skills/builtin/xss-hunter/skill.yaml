@@ -1,0 +1,56 @@
+id: xss-hunter
+version: "1.0.0"
+name: XSS Hunter
+description: Detect reflected and stored XSS via read-only probing with context-aware payloads. Sends mutated requests automatically within scope and budget.
+triggers:
+  - "hunt xss"
+  - "test reflected xss"
+  - "is this xss"
+  - "cross site scripting"
+tools:
+  allow:
+    - history.search
+    - history.get
+    - payload.build
+    - payload.encode
+    - mutate.preview
+    - mutate.apply
+    - http.send
+    - http.batch
+    - tool.repeater.send
+    - finding.create
+  deny:
+    - http.race
+    - scan.crawl
+    - scan.audit
+    - scan.check.register
+    - bchecks.register
+    - scope.add
+    - scope.remove
+    - config.import
+    - proxy.set_intercept
+    - mcp.call
+    - vault.set
+    - vault.delete
+    - notify.send
+limits:
+  requests: 400
+  durationSeconds: 1800
+  concurrency: 4
+  maxCostUsd: 0.3
+modelPreference: fast
+authRequired: anon
+approvalPolicy: auto
+workflow: |
+  1. Identify reflection points from history: parameters echoed in HTML/JS/JSON.
+  2. Determine context (attribute, script, HTML tag, comment, JSON) from the response.
+  3. Build context-aware payloads with `payload.build` (class xss) + `payload.encode`.
+  4. Send via `http.send` / `mutate.apply`; verify the payload survives unescaped.
+  5. Confirm execution context, not just reflection. If uncertain, hand off the request to
+     `tool.repeater.send` for manual confirmation.
+  6. Create a finding only when unescaped reflection in an executable context is shown.
+prompt: |
+  You detect XSS on authorized endpoints. Send only non-destructive payloads.
+  Prove the payload lands unescaped in an executable context (HTML tag, attribute,
+  script block, JS sink). If a payload requires a victim, stop: manual confirmation
+  via Repeater only. Never execute against real third-party users.

@@ -1,0 +1,57 @@
+id: ssrf-hunter
+version: "1.0.0"
+name: SSRF Hunter
+description: Detect server-side request forgery via OOB interaction proof. Uses oob.session and oob.poll. Sends mutated requests automatically within scope and budget.
+triggers:
+  - "hunt ssrf"
+  - "test ssrf"
+  - "server side request forgery"
+  - "does the server fetch urls"
+tools:
+  allow:
+    - history.search
+    - history.get
+    - payload.build
+    - payload.encode
+    - mutate.preview
+    - mutate.apply
+    - http.send
+    - http.batch
+    - oob.session
+    - oob.poll
+    - finding.create
+  deny:
+    - http.race
+    - scan.crawl
+    - scan.audit
+    - scan.check.register
+    - bchecks.register
+    - scope.add
+    - scope.remove
+    - config.import
+    - proxy.set_intercept
+    - mcp.call
+    - vault.set
+    - vault.delete
+    - notify.send
+limits:
+  requests: 300
+  durationSeconds: 1800
+  concurrency: 3
+  maxCostUsd: 0.3
+modelPreference: fast
+authRequired: anon
+approvalPolicy: auto
+workflow: |
+  1. Find URL-fetching surfaces: params named url, uri, target, redirect, image, file, callback, webhook.
+  2. Baseline a request with a benign value via `http.send`.
+  3. Create an OOB session with `oob.session`; inject the http(s)/dns payload into the param.
+  4. Send via `mutate.apply`; poll `oob.poll` for an interaction.
+  5. For confirmed fetch behavior, test internal targets (169.254.169.254, 100.100.100.200,
+     localhost) with short timeouts and low cardinality.
+  6. Create a finding only when an OOB interaction is observed (blind proof).
+prompt: |
+  You detect SSRF on authorized endpoints. Mandatory proof: an OOB interaction
+  observed via oob.poll. Probe URL-fetching params with your own OOB payloads
+  first; only after a confirmed fetch, and sparingly, test internal metadata
+  addresses. Never use real collaborator addresses you do not control.
