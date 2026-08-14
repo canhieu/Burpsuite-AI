@@ -54,7 +54,7 @@ const DEFAULT_ROLES: SidecarConfig["models"]["roles"] = {
   planner: { provider: "openai", model: "gpt-5.1-codex" },
   executor: { provider: "openai", model: "gpt-5.1-codex-mini" },
   reviewer: { provider: "openai", model: "gpt-5.1-codex" },
-  fast: { provider: "deepseek", model: "deepseek-chat" },
+  fast: { provider: "deepseek", model: "deepseek-v4-flash" },
 }
 
 const DEFAULT_CONFIG: SidecarConfig = {

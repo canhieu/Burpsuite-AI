@@ -21,6 +21,7 @@ export interface ProviderEvent {
 export interface StreamOptions {
   maxTokens?: number
   temperature?: number
+  reasoningEffort?: "low" | "high" | "max" | string
   tools?: unknown[]
   signal?: AbortSignal
   onUsage?: (usage: unknown) => void
@@ -97,7 +98,8 @@ export async function createProviderRegistry(
         if (model) return { id: model, provider: maybeProvider }
       }
       for (const a of adapters.values()) {
-        if (norm.startsWith(a.provider + "/") || norm.includes(a.provider)) {
+        const prefix = a.provider + "/"
+        if (norm.startsWith(prefix) || norm.startsWith(a.provider + ":")) {
           return { id: norm.split(/[/:]/).slice(1).join("/"), provider: a.provider }
         }
       }
@@ -195,7 +197,9 @@ async function* openAiCompatibleStream(
     stream: true,
   }
   if (opts?.maxTokens) body["max_tokens"] = opts.maxTokens
+  else body["max_tokens"] = 4096
   if (opts?.temperature !== undefined) body["temperature"] = opts.temperature
+  if (opts?.reasoningEffort) body["reasoning_effort"] = opts.reasoningEffort
   if (opts?.tools) body["tools"] = opts.tools
 
   const res = await fetch(`${baseUrl}/chat/completions`, {
@@ -410,6 +414,7 @@ async function* openAiResponsesStream(
     stream: true,
   }
   if (opts?.maxTokens) body["max_output_tokens"] = opts.maxTokens
+  if (opts?.reasoningEffort) body["reasoning"] = { effort: opts.reasoningEffort }
   if (opts?.tools && Array.isArray(opts.tools) && opts.tools.length > 0) {
     body["tools"] = opts.tools
   }

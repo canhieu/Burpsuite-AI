@@ -69,6 +69,7 @@ class AgentTab(private val ctx: AgentContext) {
     private val chatProviderCombo = JComboBox(arrayOf("openai", "anthropic", "deepseek", "ollama"))
     private val chatModelCombo = JComboBox<String>()
     private var chatModels: List<String> = emptyList()
+    private val chatReasoningCombo = JComboBox(arrayOf("auto", "low", "high", "max"))
 
     fun component(): JComponent = root
 
@@ -240,6 +241,8 @@ class AgentTab(private val ctx: AgentContext) {
         modelRow.add(chatProviderCombo)
         modelRow.add(JLabel("model:"))
         modelRow.add(chatModelCombo)
+        modelRow.add(JLabel("reasoning:"))
+        modelRow.add(chatReasoningCombo)
 
         val split = JSplitPane(JSplitPane.VERTICAL_SPLIT, output, inputRow)
         split.resizeWeight = 0.85
@@ -423,6 +426,7 @@ class AgentTab(private val ctx: AgentContext) {
             "stream" to true,
             "provider" to (chatProviderCombo.selectedItem?.toString() ?: "openai"),
             "model" to (chatModelCombo.editor.item?.toString() ?: chatModelCombo.selectedItem?.toString() ?: ""),
+            "reasoning" to (chatReasoningCombo.selectedItem?.toString()?.takeIf { it != "auto" } ?: ""),
         )
         Thread {
             val reply = rpc.callSidecar("agent.chat", params, timeoutMs = 120000)

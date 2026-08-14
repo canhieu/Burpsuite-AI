@@ -17,6 +17,7 @@ export function chatHandlers(): HandlerGroup {
       const skillContext = skill ? `[skill:${skill}]` : undefined
       const streamOpts = {
         maxTokens: typeof params["maxTokens"] === "number" ? params["maxTokens"] : undefined,
+        reasoningEffort: typeof params["reasoning"] === "string" ? params["reasoning"] : undefined,
       }
       const finalMessages = skillContext ? [{ role: "system" as const, content: skillContext }, ...messages] : messages
 
