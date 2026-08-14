@@ -18,6 +18,7 @@ import javax.swing.JSplitPane
 import javax.swing.JTabbedPane
 import javax.swing.JTable
 import javax.swing.JTextArea
+import javax.swing.JTextField
 import javax.swing.JTextPane
 import javax.swing.SwingUtilities
 import javax.swing.table.AbstractTableModel
@@ -34,6 +35,7 @@ class AgentTab(private val ctx: AgentContext) {
     private val startButton = JButton("Start sidecar")
     private val stopButton = JButton("Stop")
     private val stopAllButton = JButton("STOP ALL")
+    private val sidecarDirField = JTextField(40)
 
     private val chatInput = JTextArea(4, 80)
     private val chatOutput = JTextPane()
@@ -86,7 +88,62 @@ class AgentTab(private val ctx: AgentContext) {
         buttons.add(stopButton)
         buttons.add(stopAllButton)
         panel.add(buttons, BorderLayout.SOUTH)
+
+        val config = JPanel(BorderLayout())
+        config.border = BorderFactory.createTitledBorder("Sidecar location (Windows)")
+        val dirLabel = JLabel("sidecar dir: ")
+        dirLabel.font = dirLabel.font.deriveFont(Font.PLAIN, 11f)
+        sidecarDirField.text = loadSidecarDirConfig()
+        sidecarDirField.font = sidecarDirField.font.deriveFont(Font.PLAIN, 11f)
+        val saveDir = JButton("Save & start")
+        saveDir.addActionListener {
+            val dir = sidecarDirField.text.trim().trimEnd('/', '\\')
+            saveSidecarDirConfig(dir)
+            ctx.sidecar?.start()
+            statusLabel.text = "sidecar: starting..."
+        }
+        val dirRow = JPanel(BorderLayout())
+        dirRow.add(dirLabel, BorderLayout.WEST)
+        dirRow.add(sidecarDirField, BorderLayout.CENTER)
+        dirRow.add(saveDir, BorderLayout.EAST)
+        config.add(dirRow, BorderLayout.CENTER)
+        config.add(
+            JLabel("Path to the sidecar folder containing dist/index.js (e.g. E:/lab/burp/sidecar). Saved to ~/.burp-agent/sidecar.json"),
+            BorderLayout.NORTH,
+        )
+        panel.add(config, BorderLayout.CENTER)
         return panel
+    }
+
+    private fun loadSidecarDirConfig(): String {
+        return try {
+            val home = System.getProperty("user.home") ?: return ""
+            val f = java.io.File(java.io.File(home, ".burp-agent"), "sidecar.json")
+            if (!f.isFile) return ""
+            val idx = f.readText().indexOf("\"sidecarDir\"")
+            if (idx < 0) return ""
+            val rest = f.readText().substring(idx + 13)
+            val s = rest.indexOf('"')
+            if (s < 0) return ""
+            val e = rest.indexOf('"', s + 1)
+            if (e > s) rest.substring(s + 1, e) else ""
+        } catch (_: Exception) {
+            ""
+        }
+    }
+
+    private fun saveSidecarDirConfig(dir: String) {
+        try {
+            val home = System.getProperty("user.home") ?: return
+            val base = java.io.File(home, ".burp-agent")
+            if (!base.exists()) base.mkdirs()
+            java.io.File(base, "sidecar.json").writeText(
+                "{\n  \"sidecarDir\": \"$dir\"\n}\n"
+            )
+            ctx.audit.add("info", "sidecar.config", dir, "ok")
+        } catch (e: Exception) {
+            ctx.audit.add("error", "sidecar.config", e.message ?: "write failed", "failed")
+        }
     }
 
     private fun buildChatPanel(): JComponent {
