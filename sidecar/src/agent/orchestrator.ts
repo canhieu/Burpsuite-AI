@@ -171,7 +171,7 @@ export class AgentEngine {
     ]
     let text: string
     try {
-      const out = await collectModelText(planner, messages, { model: run.config.models?.planner }, run.abort.signal)
+      const out = await collectModelText(planner, messages, { model: run.config.models?.planner?.model, provider: run.config.models?.planner?.provider }, run.abort.signal)
       text = out.text
     } catch (err) {
       if (run.abort.signal.aborted) throw err
@@ -470,7 +470,7 @@ function extractJsonBlocks(text: string): string[] {
 async function collectModelText(
   model: ModelClient,
   messages: ChatMessage[],
-  opts: { model?: string },
+  opts: { model?: string; provider?: string },
   signal: AbortSignal,
 ): Promise<{ text: string; tokens: number }> {
   let text = ""
@@ -478,7 +478,7 @@ async function collectModelText(
   const onUsage = (usage: unknown) => {
     tokens += estimateTokens(usage)
   }
-  const iter = model.stream(messages, { model: opts.model, signal, onUsage })
+  const iter = model.stream(messages, { model: opts.model, provider: opts.provider, signal, onUsage })
   for await (const ev of iter) {
     if (ev.type === "text") text += String(ev.data)
     else if (ev.type === "error") throw new Error(`planner error: ${String(ev.data)}`)

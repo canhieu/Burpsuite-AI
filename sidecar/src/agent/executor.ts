@@ -333,7 +333,7 @@ function buildMessages(ctx: ExecutorContext, history: ToolCallFrame[]): ChatMess
 async function callModel(
   client: ModelClient,
   messages: ChatMessage[],
-  opts: { model?: string },
+  opts: { model?: string; provider?: string },
   signal: AbortSignal,
   ctx?: Pick<ExecutorContext, "runId" | "cb">,
 ): Promise<ModelOutput> {
@@ -343,7 +343,7 @@ async function callModel(
   const onUsage = (usage: unknown) => {
     tokens += estimateTokens(usage)
   }
-  const iter = client.stream(messages, { model: opts.model, signal, onUsage })
+  const iter = client.stream(messages, { model: opts.model, provider: opts.provider, signal, onUsage })
   for await (const ev of iter) {
     if (ev.type === "text") {
       text += String(ev.data)
@@ -381,7 +381,7 @@ export async function runExecutor(ctx: ExecutorContext): Promise<ExecutorResult>
   const state: ExecutorResult = { status: "running", requestsUsed: 0, tokenUsed: 0, costUsd: 0, findings: [] }
   const history: ToolCallFrame[] = []
   const window = ctx.historyWindow
-  const modelOpt = { model: ctx.config.models?.executor }
+  const modelOpt = { model: ctx.config.models?.executor?.model, provider: ctx.config.models?.executor?.provider }
 
   while (true) {
     if (ctx.signal.aborted || ctx.isCancelled()) {
@@ -414,7 +414,7 @@ export async function runExecutor(ctx: ExecutorContext): Promise<ExecutorResult>
     }
 
     state.tokenUsed += output.tokens
-    const costDelta = estimateCost(output.tokens, ctx.config.models?.executor, ctx.costModel)
+    const costDelta = estimateCost(output.tokens, ctx.config.models?.executor?.model, ctx.costModel)
     state.costUsd += costDelta
     ctx.budget.addCost(costDelta)
 

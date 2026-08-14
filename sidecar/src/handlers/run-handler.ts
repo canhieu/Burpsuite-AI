@@ -35,7 +35,15 @@ function sanitizeModels(raw: unknown): RunConfig["models"] {
   const o = raw as Record<string, unknown>
   const out: NonNullable<RunConfig["models"]> = {}
   for (const role of ["planner", "executor", "reviewer"] as const) {
-    if (typeof o[role] === "string" && o[role]) out[role] = o[role] as string
+    const r = o[role]
+    if (r && typeof r === "object") {
+      const obj = r as Record<string, unknown>
+      const model = typeof obj["model"] === "string" ? obj["model"] : undefined
+      const provider = typeof obj["provider"] === "string" ? obj["provider"] : undefined
+      if (model) out[role] = { provider, model }
+    } else if (typeof r === "string" && r) {
+      out[role] = { model: r as string }
+    }
   }
   return Object.keys(out).length ? out : undefined
 }

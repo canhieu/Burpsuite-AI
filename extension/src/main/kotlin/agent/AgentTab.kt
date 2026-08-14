@@ -69,7 +69,7 @@ class AgentTab(private val ctx: AgentContext) {
     private val chatProviderCombo = JComboBox(arrayOf("openai", "anthropic", "deepseek", "ollama"))
     private val chatModelCombo = JComboBox<String>()
     private var chatModels: List<String> = emptyList()
-    private val chatReasoningCombo = JComboBox(arrayOf("auto", "low", "high", "max"))
+    private val chatReasoningCombo = JComboBox(arrayOf("auto", "low", "medium", "high", "xhigh", "max"))
 
     private val chatBody = StringBuilder()
     private val streamBuffer = StringBuilder()
@@ -432,13 +432,17 @@ class AgentTab(private val ctx: AgentContext) {
         val context = conversation.toString().trim()
         val fullTask = if (context.isEmpty()) text else "$context\n\nNew instruction: $text"
         conversation.append("USER: ").append(text).append('\n')
+        val provider = chatProviderCombo.selectedItem?.toString() ?: "deepseek"
+        val model = chatModelCombo.editor.item?.toString()?.takeIf { it.isNotBlank() }
+            ?: chatModelCombo.selectedItem?.toString() ?: ""
+        val modelArg = Json.obj("provider" to provider, "model" to model)
         val params = Json.obj(
             "task" to fullTask,
             "mode" to "smart",
             "models" to Json.obj(
-                "planner" to (chatProviderCombo.selectedItem?.toString() ?: "deepseek"),
-                "executor" to (chatProviderCombo.selectedItem?.toString() ?: "deepseek"),
-                "reviewer" to (chatProviderCombo.selectedItem?.toString() ?: "deepseek"),
+                "planner" to modelArg,
+                "executor" to modelArg,
+                "reviewer" to modelArg,
             ),
         )
         Thread {

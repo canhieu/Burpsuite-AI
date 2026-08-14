@@ -12,13 +12,18 @@ export interface RunBudget {
   maxCostUsd?: number
 }
 
+export interface RunModelRef {
+  provider?: string
+  model: string
+}
+
 export interface RunConfig {
   task: string
   skill?: string
   mode: RunMode
   scope?: string[]
   budget?: RunBudget
-  models?: { planner?: string; executor?: string; reviewer?: string }
+  models?: { planner?: RunModelRef; executor?: RunModelRef; reviewer?: RunModelRef }
   executors?: number
   seedRefs?: MessageRef[]
 }
