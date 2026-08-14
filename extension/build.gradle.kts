@@ -31,6 +31,11 @@ tasks.shadowJar {
     mergeServiceFiles()
 }
 
+// Avoid the plain `jar` task overwriting the shadow (fat) jar's output file.
+tasks.jar {
+    enabled = false
+}
+
 tasks.build {
     dependsOn(tasks.shadowJar)
 }
