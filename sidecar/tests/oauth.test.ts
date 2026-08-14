@@ -53,7 +53,10 @@ function testConfig(authPath: string): SidecarConfig {
         clientId: "test-client",
         scope: "openid offline_access",
         tokenEndpoint: `http://127.0.0.1:${OAUTH_PORT}/oauth/token`,
-        deviceEndpoint: `http://127.0.0.1:${OAUTH_PORT}/oauth/device/code`,
+        deviceEndpoint: `http://127.0.0.1:${OAUTH_PORT}/api/accounts/deviceauth/usercode`,
+        deviceTokenEndpoint: `http://127.0.0.1:${OAUTH_PORT}/api/accounts/deviceauth/token`,
+        deviceCallback: `http://127.0.0.1:${OAUTH_PORT}/deviceauth/callback`,
+        verificationUri: `http://127.0.0.1:${OAUTH_PORT}/codex/device`,
       },
       anthropic: {
         issuer: `http://127.0.0.1:${OAUTH_PORT}`,

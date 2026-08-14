@@ -71,6 +71,10 @@ class AgentTab(private val ctx: AgentContext) {
     private var chatModels: List<String> = emptyList()
     private val chatReasoningCombo = JComboBox(arrayOf("auto", "low", "high", "max"))
 
+    private val chatBody = StringBuilder()
+    private val streamBuffer = StringBuilder()
+    private var streaming = false
+
     fun component(): JComponent = root
 
     init {
@@ -508,6 +512,7 @@ class AgentTab(private val ctx: AgentContext) {
 
     fun appendChat(prefix: String, kind: String, text: String) {
         SwingUtilities.invokeLater {
+            flushStream()
             val color = when (kind) {
                 "tool" -> "#3366cc"
                 "result" -> "#3366cc"
@@ -516,13 +521,41 @@ class AgentTab(private val ctx: AgentContext) {
                 "user" -> "#444444"
                 else -> "#888888"
             }
-            val escaped = text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-                .replace("\n", "<br>")
-            val current = chatOutput.text
-            val body = current.substringAfter("<body>", "").substringBefore("</body>", "")
+            val escaped = escapeHtml(text)
             val line = if (prefix.isBlank()) "<p><span style='color:$color'>$escaped</span></p>"
             else "<p><b style='color:$color'>[$prefix]</b> <span style='color:$color'>$escaped</span></p>"
-            chatOutput.text = "<html><body>${body}$line</body></html>"
+            chatBody.append(line)
+            renderChat()
+        }
+    }
+
+    private fun escapeHtml(s: String): String =
+        s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
+
+    private fun streamText(chunk: String) {
+        SwingUtilities.invokeLater {
+            if (!streaming) {
+                streaming = true
+                streamBuffer.clear()
+                chatBody.append("<p><b style='color:#339933'>[agent]</b> <span style='color:#888888'>")
+            }
+            streamBuffer.append(chunk)
+            renderChat()
+        }
+    }
+
+    private fun flushStream() {
+        if (!streaming) return
+        streaming = false
+        chatBody.append(escapeHtml(streamBuffer.toString())).append("</span></p>")
+        streamBuffer.clear()
+    }
+
+    private fun renderChat() {
+        if (streaming) {
+            chatOutput.text = "<html><body>${chatBody}${escapeHtml(streamBuffer.toString())}</body></html>"
+        } else {
+            chatOutput.text = "<html><body>${chatBody}</body></html>"
         }
     }
 
@@ -552,8 +585,21 @@ class AgentTab(private val ctx: AgentContext) {
         when (method) {
             "agent.event" -> {
                 val type = params.get("type")?.asString ?: "text"
-                val data = params.get("data")?.takeIf { !it.isJsonNull }?.toString() ?: ""
-                appendChat("agent", type, data)
+                when (type) {
+                    "text" -> {
+                        val data = params.get("data")?.takeIf { !it.isJsonNull }?.asString ?: ""
+                        streamText(data)
+                    }
+                    "error" -> {
+                        val data = params.get("data")?.takeIf { !it.isJsonNull }?.toString() ?: ""
+                        appendChat("agent", "error", data)
+                    }
+                    "done" -> SwingUtilities.invokeLater { flushStream() }
+                    else -> {
+                        val data = params.get("data")?.takeIf { !it.isJsonNull }?.toString() ?: ""
+                        appendChat("agent", type, data)
+                    }
+                }
             }
             "auth.status.changed" -> SwingUtilities.invokeLater { renderProviders(params) }
             "approval.requested" -> promptApproval(params)

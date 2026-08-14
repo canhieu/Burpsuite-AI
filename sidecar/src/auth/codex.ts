@@ -1,5 +1,17 @@
 import { createCredentialFile, type AuthTokens, codexAuthPath, normalizeTokenResponse, type OAuthConfig } from "./credentials.js"
 
+function expiresInFrom(body: Record<string, unknown>): number {
+  const v = body["expires_in"]
+  if (typeof v === "number") return v
+  if (typeof v === "string" && v.trim() !== "") return parseInt(v, 10) || 600
+  const at = body["expires_at"]
+  if (typeof at === "string") {
+    const t = Date.parse(at)
+    if (!Number.isNaN(t)) return Math.max(1, Math.round((t - Date.now()) / 1000))
+  }
+  return 600
+}
+
 /**
  * Codex CLI-compatible OAuth for ChatGPT-account auth.
  * Implements the device-code flow (primary) used by `codex login --device-auth`,
@@ -83,17 +95,18 @@ export class CodexOAuth {
       const res = await this.fetchImpl(cfg.deviceEndpoint, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ client_id: cfg.clientId, scope: cfg.scope }),
+        body: JSON.stringify({ client_id: cfg.clientId }),
       })
       if (!res.ok) {
         return { flowId, state: "error", detail: `device code request failed: HTTP ${res.status}` }
       }
       const body = (await res.json()) as Record<string, unknown>
-      const userCode = typeof body["user_code"] === "string" ? body["user_code"] : undefined
-      const verificationUri = (typeof body["verification_uri"] === "string" ? body["verification_uri"] : cfg.issuer) as string
-      const deviceCode = typeof body["device_code"] === "string" ? body["device_code"] : undefined
-      const interval = typeof body["interval"] === "number" ? body["interval"] : 5
-      const expiresIn = typeof body["expires_in"] === "number" ? body["expires_in"] : 600
+      const userCode = (typeof body["user_code"] === "string" ? body["user_code"] : typeof body["usercode"] === "string" ? body["usercode"] : undefined) as string | undefined
+      const deviceCode = (typeof body["device_auth_id"] === "string" ? body["device_auth_id"] : typeof body["device_code"] === "string" ? body["device_code"] : undefined) as string | undefined
+      const intervalRaw = body["interval"]
+      const interval = typeof intervalRaw === "number" ? intervalRaw : parseInt(String(intervalRaw ?? "5"), 10) || 5
+      const expiresIn = expiresInFrom(body)
+      const verificationUri = ((cfg.verificationUri ?? cfg.issuer ?? "").trim() || body["verification_uri"]) as string | undefined
       if (!userCode || !deviceCode) return { flowId, state: "error", detail: "malformed device code response" }
       return { flowId, state: "pending", userCode, verificationUri, deviceCode, interval, expiresIn }
     } catch (e) {
@@ -101,38 +114,88 @@ export class CodexOAuth {
     }
   }
 
-  /** Poll token endpoint for a started device flow. */
-  async pollDeviceCode(flowId: string, deviceCode: string, interval = 5): Promise<DeviceCodeResult> {
+  /**
+   * Poll token endpoint for a started device flow. `deviceCode` is the device_auth_id;
+   * the real ChatGPT flow returns an authorization_code + PKCE, which we then exchange.
+   */
+  async pollDeviceCode(flowId: string, deviceCode: string, interval = 5, userCode = ""): Promise<DeviceCodeResult> {
     const gate = CODE.get(flowId)
     if (!gate) return { state: "error", detail: "unknown flow" }
     const cfg = this.cfg()
     try {
-      const res = await this.fetchImpl(cfg.tokenEndpoint, {
+      const tokenEndpoint = cfg.deviceTokenEndpoint ?? cfg.tokenEndpoint
+      const useDeviceApi = !!cfg.deviceTokenEndpoint
+      const body: Record<string, unknown> = useDeviceApi
+        ? { device_auth_id: deviceCode, user_code: userCode }
+        : {
+            client_id: cfg.clientId,
+            grant_type: "urn:ietf:params:oauth:grant-type:device_code",
+            device_code: deviceCode,
+          }
+      const res = await this.fetchImpl(tokenEndpoint, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          client_id: cfg.clientId,
-          grant_type: "urn:ietf:params:oauth:grant-type:device_code",
-          device_code: deviceCode,
-        }),
+        body: JSON.stringify(body),
       })
-      const body = (await res.json()) as Record<string, unknown>
+      const rawBody = (await res.json()) as Record<string, unknown>
       if (res.ok) {
-        const tokens = normalizeTokenResponse(body)
+        if (useDeviceApi) {
+          return await this.exchangeAuthorizationCode(flowId, cfg, rawBody)
+        }
+        const tokens = normalizeTokenResponse(rawBody)
         await this.writeTokens(tokens)
         CODE.delete(flowId)
         return { state: "success", accessToken: tokens.access_token, refreshToken: tokens.refresh_token }
       }
-      const err = typeof body["error"] === "string" ? body["error"] : ""
-      if (err === "authorization_pending" || err === "slow_down") {
+      const err = typeof rawBody["error"] === "string" ? rawBody["error"] : (rawBody["error"] as { code?: string })?.code ?? ""
+      if (useDeviceApi && (res.status === 403 || res.status === 404)) {
         await this.sleepMs(interval * 1000)
-        return { state: "pending", userCode: "", interval }
+        return { state: "pending", userCode, interval }
       }
-      if (err === "expired_token" || err === "access_denied") {
+      if (err === "authorization_pending" || err === "slow_down" || err === "deviceauth_authorization_pending") {
+        await this.sleepMs(interval * 1000)
+        return { state: "pending", userCode, interval }
+      }
+      if (err === "expired_token" || err === "access_denied" || err === "deviceauth_expired" || err === "deviceauth_access_denied") {
         CODE.delete(flowId)
         return { state: "error", detail: err }
       }
       return { state: "error", detail: `token error: ${err || res.status}` }
+    } catch (e) {
+      return { state: "error", detail: (e as Error).message }
+    }
+  }
+
+  /** Exchange the device-polled authorization_code (PKCE) for real tokens at /oauth/token. */
+  private async exchangeAuthorizationCode(flowId: string, cfg: OAuthConfig, polled: Record<string, unknown>): Promise<DeviceCodeResult> {
+    const code = typeof polled["authorization_code"] === "string" ? polled["authorization_code"] : undefined
+    const codeVerifier = typeof polled["code_verifier"] === "string" ? polled["code_verifier"] : undefined
+    const codeChallenge = typeof polled["code_challenge"] === "string" ? polled["code_challenge"] : undefined
+    if (!code || !codeVerifier) {
+      return { state: "error", detail: "malformed authorization_code response" }
+    }
+    const redirectUri = cfg.deviceCallback ?? `${cfg.issuer}/deviceauth/callback`
+    const params = new URLSearchParams({
+      grant_type: "authorization_code",
+      code,
+      redirect_uri: redirectUri,
+      client_id: cfg.clientId,
+      code_verifier: codeVerifier,
+    })
+    if (codeChallenge) params.set("code_challenge", codeChallenge)
+    try {
+      const res = await this.fetchImpl(cfg.tokenEndpoint, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: params.toString(),
+      })
+      const body = (await res.json()) as Record<string, unknown>
+      if (!res.ok) return { state: "error", detail: `token exchange failed: HTTP ${res.status}` }
+      const tokens = normalizeTokenResponse(body)
+      if (!tokens.access_token) return { state: "error", detail: "token exchange returned no access_token" }
+      await this.writeTokens(tokens)
+      CODE.delete(flowId)
+      return { state: "success", accessToken: tokens.access_token, refreshToken: tokens.refresh_token }
     } catch (e) {
       return { state: "error", detail: (e as Error).message }
     }
@@ -150,7 +213,7 @@ export class CodexOAuth {
     while (Date.now() < deadline) {
       const gate = CODE.get(flowId)
       if (!gate || gate.cancel) return { state: "error", detail: "cancelled" }
-      last = await this.pollDeviceCode(flowId, deviceCode, interval)
+      last = await this.pollDeviceCode(flowId, deviceCode, interval, last.userCode ?? "")
       if (last.state !== "pending") return last
     }
     return { state: "error", detail: "timed out" }

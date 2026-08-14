@@ -32,12 +32,15 @@ function oauthConfig(cfg: SidecarConfig, provider: OAuthProvider): OAuthConfig |
     scope,
     tokenEndpoint: token,
     deviceEndpoint: o.deviceEndpoint,
+    deviceTokenEndpoint: o.deviceTokenEndpoint,
+    deviceCallback: o.deviceCallback,
+    verificationUri: o.verificationUri,
     authorizeEndpoint: o.authorizeEndpoint,
     redirectUri: o.redirectUri,
   }
 }
 
-const deviceFlows = new Map<string, { codex: CodexOAuth; deviceCode: string; interval: number; expiresAt: number }>()
+const deviceFlows = new Map<string, { codex: CodexOAuth; deviceCode: string; userCode: string; interval: number; expiresAt: number }>()
 
 export function createAuthManager(cfg: SidecarConfig, opts?: { authPath?: string; credentialsPath?: string }): AuthManager {
   const codex = new CodexOAuth({ config: oauthConfig(cfg, "openai") ?? { issuer: "", clientId: "", scope: "", tokenEndpoint: "" }, authPath: opts?.authPath })
@@ -68,6 +71,7 @@ export function createAuthManager(cfg: SidecarConfig, opts?: { authPath?: string
         deviceFlows.set(start.flowId, {
           codex,
           deviceCode: start.deviceCode,
+          userCode: start.userCode ?? "",
           interval: start.interval ?? 5,
           expiresAt: Date.now() + (start.expiresIn ?? 600) * 1000,
         })
@@ -98,7 +102,7 @@ export function createAuthManager(cfg: SidecarConfig, opts?: { authPath?: string
           deviceFlows.delete(flowId)
           return { state: "error", detail: "device code expired; restart login" }
         }
-        const r = await flow.codex.pollDeviceCode(flowId, deviceCode || flow.deviceCode, interval ?? flow.interval)
+        const r = await flow.codex.pollDeviceCode(flowId, deviceCode || flow.deviceCode, interval ?? flow.interval, flow.userCode)
         if (r.state === "success") deviceFlows.delete(flowId)
         return { ...r }
       }

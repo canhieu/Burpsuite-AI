@@ -28,6 +28,9 @@ export interface SidecarConfig {
       scope?: string
       tokenEndpoint?: string
       deviceEndpoint?: string
+      deviceTokenEndpoint?: string
+      deviceCallback?: string
+      verificationUri?: string
       authorizeEndpoint?: string
       redirectUri?: string
     }
@@ -37,6 +40,9 @@ export interface SidecarConfig {
       scope?: string
       tokenEndpoint?: string
       deviceEndpoint?: string
+      deviceTokenEndpoint?: string
+      deviceCallback?: string
+      verificationUri?: string
       authorizeEndpoint?: string
       redirectUri?: string
     }
@@ -81,7 +87,10 @@ const DEFAULT_CONFIG: SidecarConfig = {
       clientId: "app_EMoamEEZ73f0CkXaXp7hrann",
       scope: "openid email profile offline_access model.request model_install",
       tokenEndpoint: "https://auth.openai.com/oauth/token",
-      deviceEndpoint: "https://auth.openai.com/oauth/device/code",
+      deviceEndpoint: "https://auth.openai.com/api/accounts/deviceauth/usercode",
+      deviceTokenEndpoint: "https://auth.openai.com/api/accounts/deviceauth/token",
+      deviceCallback: "https://auth.openai.com/deviceauth/callback",
+      verificationUri: "https://auth.openai.com/codex/device",
     },
     anthropic: {
       issuer: "https://claude.ai",

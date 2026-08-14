@@ -70,6 +70,9 @@ export interface OAuthConfig {
   scope: string
   tokenEndpoint: string
   deviceEndpoint?: string
+  deviceTokenEndpoint?: string
+  deviceCallback?: string
+  verificationUri?: string
   authorizeEndpoint?: string
   redirectUri?: string
   checkEndpoint?: string
