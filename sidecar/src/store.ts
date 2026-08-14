@@ -111,41 +111,87 @@ function refKey(ref: MessageRef): string {
   return `${ref.projectId}\u0000${ref.source}\u0000${String(ref.id)}`
 }
 
-export function createStore(dataDir: string, log?: (msg: string) => void): Store {
+export async function createStore(dataDir: string, log?: (msg: string) => void): Promise<Store> {
   const dir = resolve(dataDir)
   mkdirSync(dir, { recursive: true })
 
+  // Prefer Node's built-in node:sqlite (available Node >=22.5, no native build).
+  const nodeSqliteFactory = await loadNodeSqliteFactory()
+  if (nodeSqliteFactory) {
+    try {
+      return new SqliteStore(nodeSqliteFactory, resolve(dir, "burp-agent.db"), log)
+    } catch (err) {
+      log?.(`node:sqlite init failed, falling back: ${(err as Error).message}`)
+    }
+  }
+
+  // Fallback: better-sqlite3 (native; requires prebuilt binary or build tools).
   const require = createRequire(import.meta.url)
-  let Sqlite: typeof import("better-sqlite3") | null = null
+  let Sqlite: { new (path: string): SqliteBackend } | null = null
   try {
-    Sqlite = require("better-sqlite3") as typeof import("better-sqlite3")
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const loaded = require("better-sqlite3") as unknown
+    if (loaded && typeof loaded === "function") {
+      Sqlite = loaded as { new (path: string): SqliteBackend }
+    }
   } catch {
     Sqlite = null
   }
 
   if (Sqlite) {
     try {
-      return new SqliteStore(Sqlite, resolve(dir, "burp-agent.db"), log)
+      return new SqliteStore((p) => new Sqlite(p), resolve(dir, "burp-agent.db"), log)
     } catch (err) {
-      log?.(`sqlite store init failed, falling back to json: ${(err as Error).message}`)
+      log?.(`better-sqlite3 init failed, falling back to json: ${(err as Error).message}`)
     }
   } else {
-    log?.("better-sqlite3 unavailable, using json file store")
+    log?.("sqlite unavailable (node:sqlite or better-sqlite3), using json file store")
   }
   return new JsonStore(resolve(dir, "store.json"), log)
 }
 
+interface SqliteBackend {
+  prepare(sql: string): {
+    get(...params: unknown[]): unknown
+    all(...params: unknown[]): unknown[]
+    run(...params: unknown[]): { changes: number }
+  }
+  exec(sql: string): void
+  pragma?(sql: string): void
+  close(): void
+}
+
+type SqliteFactory = (path: string) => SqliteBackend
+
+/** Load node:sqlite (built into Node >=22.5). Returns a factory or null. */
+async function loadNodeSqliteFactory(): Promise<SqliteFactory | null> {
+  try {
+    // @ts-expect-error node:sqlite is not in the Node 20 type defs used by this toolchain
+    const mod = await import("node:sqlite")
+    const DatabaseSync = mod?.DatabaseSync as { new (path: string): SqliteBackend } | undefined
+    if (!DatabaseSync) return null
+    return (path: string): SqliteBackend => new DatabaseSync(path) as SqliteBackend
+  } catch {
+    return null
+  }
+}
+
 class SqliteStore implements Store {
   readonly backend = "sqlite" as const
-  private db: import("better-sqlite3").Database
+  private db: SqliteBackend
 
   constructor(
-    Sqlite: typeof import("better-sqlite3"),
+    factory: SqliteFactory,
     path: string,
     private log?: (msg: string) => void,
   ) {
-    const db = new Sqlite(path)
-    db.pragma("journal_mode = WAL")
+    const db = factory(path)
+    try {
+      db.pragma?.("journal_mode = WAL")
+    } catch {
+      // node:sqlite has no .pragma() — use exec
+      db.exec("PRAGMA journal_mode = WAL")
+    }
     db.exec(SCHEMA)
     this.db = db
   }

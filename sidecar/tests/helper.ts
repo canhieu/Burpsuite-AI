@@ -66,7 +66,7 @@ export interface TestServer {
 
 export async function startTestServer(extraHandlers?: Record<string, Handler>): Promise<TestServer> {
   const config = makeConfig()
-  const store = createStore(config.dataDir)
+  const store = await createStore(config.dataDir)
   const registry = await createProviderRegistry(config)
   const logger = createLogger("error", "test")
   const services: Services = {

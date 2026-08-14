@@ -5,7 +5,7 @@ import { join } from "node:path"
 import { createStore, type Store } from "../src/store.js"
 import type { Finding, Evidence } from "../src/types.js"
 
-function tempStore(): Store {
+function tempStore(): Promise<Store> {
   return createStore(mkdtempSync(join(tmpdir(), "sidecar-store-")))
 }
 
@@ -21,15 +21,15 @@ const sampleFinding: Finding = {
 }
 
 describe("store findings", () => {
-  it("creates and reads a finding", () => {
-    const s = tempStore()
+  it("creates and reads a finding", async () => {
+    const s = await tempStore()
     s.createFinding(sampleFinding)
     const got = s.getFinding("fnd_1")
     expect(got).toMatchObject({ id: "fnd_1", title: "SQL injection in /search", severity: "high" })
   })
 
-  it("lists findings with filters", () => {
-    const s = tempStore()
+  it("lists findings with filters", async () => {
+    const s = await tempStore()
     s.createFinding(sampleFinding)
     s.createFinding({ ...sampleFinding, id: "fnd_2", severity: "low", status: "validated", program: "acme" })
     expect(s.listFindings().length).toBe(2)
@@ -38,15 +38,15 @@ describe("store findings", () => {
     expect(s.listFindings({ status: "candidate" }).map((f) => f.id)).toEqual(["fnd_1"])
   })
 
-  it("updates a finding", () => {
-    const s = tempStore()
+  it("updates a finding", async () => {
+    const s = await tempStore()
     s.createFinding(sampleFinding)
     s.updateFinding({ ...sampleFinding, status: "confirmed" })
     expect(s.getFinding("fnd_1")?.status).toBe("confirmed")
   })
 
-  it("pins and reads evidence", () => {
-    const s = tempStore()
+  it("pins and reads evidence", async () => {
+    const s = await tempStore()
     s.createFinding(sampleFinding)
     const ev: Evidence = { kind: "request-response", refs: [{ projectId: "p", source: "proxy", id: 1 }], redactedPayload: "{{redacted:authorization}}", timestamp: Date.now() }
     const id = s.pinEvidence("fnd_1", ev)
@@ -58,8 +58,8 @@ describe("store findings", () => {
 })
 
 describe("store runs", () => {
-  it("persists and reloads a run", () => {
-    const s = tempStore()
+  it("persists and reloads a run", async () => {
+    const s = await tempStore()
     s.saveRun("run_1", { status: "running", task: "recon" })
     const got = s.getRun("run_1")
     expect(got).toBeDefined()
@@ -67,8 +67,8 @@ describe("store runs", () => {
     expect(s.listRuns().length).toBe(1)
   })
 
-  it("updates existing run", () => {
-    const s = tempStore()
+  it("updates existing run", async () => {
+    const s = await tempStore()
     s.saveRun("run_1", { status: "running" })
     s.saveRun("run_1", { status: "completed" })
     expect(s.getRun("run_1")?.status).toBe("completed")
@@ -77,8 +77,8 @@ describe("store runs", () => {
 })
 
 describe("store tool_log", () => {
-  it("writes and reads log entries", () => {
-    const s = tempStore()
+  it("writes and reads log entries", async () => {
+    const s = await tempStore()
     s.logTool("http.send", { statusCode: 200, bodyTruncated: false })
     s.logTool("payload.build", { payloads: 11 })
     const log = s.getToolLog()
@@ -89,8 +89,8 @@ describe("store tool_log", () => {
 })
 
 describe("store messages + settings", () => {
-  it("stores message refs with summaries", () => {
-    const s = tempStore()
+  it("stores message refs with summaries", async () => {
+    const s = await tempStore()
     s.putMessage({ projectId: "p", source: "proxy", id: 99 }, "GET /login 200")
     const got = s.getMessage({ projectId: "p", source: "proxy", id: 99 })
     expect(got?.summary).toBe("GET /login 200")
@@ -98,8 +98,8 @@ describe("store messages + settings", () => {
     expect(s.searchMessages({ text: "login" }).length).toBe(1)
   })
 
-  it("round-trips settings", () => {
-    const s = tempStore()
+  it("round-trips settings", async () => {
+    const s = await tempStore()
     s.setSetting("scope", ["*.example.com"])
     s.setSetting("nested", { a: { b: 1 } })
     expect(s.getSetting("scope")).toEqual(["*.example.com"])

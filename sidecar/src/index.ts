@@ -34,7 +34,7 @@ export async function buildSidecar(config = loadConfig()) {
     else logger.info(msg, meta)
   }
 
-  const store = createStore(config.dataDir, (msg) => log("warn", msg))
+  const store = await createStore(config.dataDir, (msg) => log("warn", msg))
   log("info", `store backend: ${store.backend}`)
   const auth = createAuthManager(config)
   initAuthManager(auth)
@@ -123,7 +123,9 @@ async function main(): Promise<void> {
   process.on("SIGINT", () => shutdown("SIGINT"))
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+import { pathToFileURL } from "node:url"
+
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   main().catch((err) => {
     console.error(err)
     process.exit(1)

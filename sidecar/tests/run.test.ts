@@ -289,7 +289,7 @@ describe("run engine", () => {
 describe("run handlers over WebSocket", () => {
   async function bootServer(planner: ModelClient, executor: ModelClient, bridge: ToolBridge) {
     const config = makeConfig()
-    const store = createStore(config.dataDir)
+    const store = await createStore(config.dataDir)
     const registry: ProviderRegistry = await createProviderRegistry(config)
     const services: Services = {
       config,

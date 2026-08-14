@@ -3,13 +3,17 @@ REM Build & start the Burpsuite-AI sidecar on Windows.
 REM Usage:  sidecar-setup.bat   (npm ci + build)
 REM         sidecar-setup.bat start  (start sidecar on 127.0.0.1:8570)
 setlocal
-cd /d "%~dp0..\sidecar"
+cd /d "%~dp0sidecar"
 
 if "%1"=="start" goto start
 if "%1"=="test" goto test
 
 echo [1/2] installing dependencies...
-call npm ci
+if exist "package-lock.json" (
+  call npm ci
+) else (
+  call npm install
+)
 if errorlevel 1 exit /b 1
 echo [2/2] building (creates dist/index.js)...
 call npm run build
