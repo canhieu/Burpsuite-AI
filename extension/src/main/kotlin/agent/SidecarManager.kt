@@ -35,16 +35,29 @@ class SidecarManager(private val ctx: AgentContext) {
         }
         val command = resolveCommand()
         if (command == null) {
-            val err = "could not locate sidecar launcher\n" +
-                "searched (in order):\n" +
-                "  - config file ~/.burp-agent/sidecar.json -> sidecarDir\n" +
-                "  - env BURP_AGENT_SIDECAR_DIR\n" +
-                "  - sysprop burp.agent.sidecarDir\n" +
-                "  - dir of the extension jar\n" +
-                "  - cwd / cwd-parent / user.home for a 'sidecar' folder\n" +
-                "looked for: bin/burp-sidecar(.exe), dist/index.js, src/index.ts (tsx)\n\n" +
-                "Fix: create ~/.burp-agent/sidecar.json with {\"sidecarDir\": \"E:/lab/burp/sidecar\"} " +
-                "or set env BURP_AGENT_SIDECAR_DIR."
+            val explicit = explicitSidecarDir()
+            val root = repoRoot()
+            val sidecarDir = when {
+                explicit != null -> File(explicit)
+                root != null -> File(root, "sidecar")
+                else -> null
+            }
+            val sb = StringBuilder()
+            sb.append("could not locate sidecar launcher\n")
+            sb.append("config sidecarDir: ${explicit ?: "(none)"}\n")
+            if (sidecarDir != null) {
+                sb.append("sidecar dir exists: ${sidecarDir.isDirectory}\n")
+                sb.append("  dist/index.js: ${File(sidecarDir, "dist" + File.separator + "index.js").isFile}\n")
+                sb.append("  node_modules/.bin/tsx: ${File(sidecarDir, "node_modules" + File.separator + ".bin" + File.separator + (if (isWindows) "tsx.cmd" else "tsx")).exists()}\n")
+                sb.append("  bin/burp-sidecar${if (isWindows) ".exe" else ""}: ${File(sidecarDir, "bin").listFiles()?.joinToString { it.name } ?: "(no bin dir)"}\n")
+            }
+            sb.append("\nFix:\n")
+            sb.append("  1. On the Windows box, build the sidecar first:\n")
+            sb.append("       cd E:\\lab\\burp\\sidecar && npm ci && npm run build\n")
+            sb.append("     (this creates dist/index.js; tsx fallback also needs node_modules)\n")
+            sb.append("  2. Make sure the sidecarDir in ~/.burp-agent/sidecar.json points at the folder that contains dist/\n")
+            sb.append("  3. Node must be installed: https://nodejs.org (or set ProgramFiles\\nodejs\\node.exe)")
+            val err = sb.toString()
             ctx.audit.add("error", "sidecar.spawn", "could not locate sidecar launcher", "failed")
             ctx.tab?.showError(err)
             return StartResult.Failure(err)
