@@ -55,9 +55,10 @@ class AgentTab(private val ctx: AgentContext) {
     // Settings tab: provider rows
     private data class ProviderRow(val name: String, val label: String)
     private val providerRows = listOf(
+        ProviderRow("shineshop", "ShineShop (OpenAI-compatible)"),
+        ProviderRow("deepseek", "DeepSeek"),
         ProviderRow("openai", "OpenAI / Compatible"),
         ProviderRow("anthropic", "Anthropic Claude"),
-        ProviderRow("deepseek", "DeepSeek"),
         ProviderRow("ollama", "Ollama (local)"),
     )
     private val providerEnabled = providerRows.associate { it.name to JCheckBox() }
@@ -66,7 +67,7 @@ class AgentTab(private val ctx: AgentContext) {
     private val settingsStatus = JLabel("settings: -")
 
     // Chat model selection
-    private val chatProviderCombo = JComboBox(arrayOf("openai", "anthropic", "deepseek", "ollama"))
+    private val chatProviderCombo = JComboBox(providerRows.map { it.name }.toTypedArray())
     private val chatModelCombo = JComboBox<String>()
     private var chatModels: List<String> = emptyList()
     private val chatReasoningCombo = JComboBox(arrayOf("auto", "low", "medium", "high", "xhigh", "max"))
@@ -228,37 +229,68 @@ class AgentTab(private val ctx: AgentContext) {
     }
 
     private fun buildChatPanel(): JComponent {
+        chatOutput.contentType = "text/html"
+        chatOutput.isEditable = false
+        chatOutput.background = Color(245, 246, 250)
         val output = JScrollPane(chatOutput)
-        output.border = BorderFactory.createTitledBorder("Conversation")
-        val input = JScrollPane(chatInput)
-        input.border = BorderFactory.createTitledBorder("Input")
+        output.border = BorderFactory.createEmptyBorder()
+        output.isOpaque = false
+        output.viewport.isOpaque = false
+
+        chatInput.background = Color.WHITE
+        chatInput.font = Font(Font.SANS_SERIF, Font.PLAIN, 13)
+        val inputScroll = JScrollPane(chatInput)
+        inputScroll.border = BorderFactory.createCompoundBorder(
+            BorderFactory.createLineBorder(Color(200, 205, 215), 1),
+            BorderFactory.createEmptyBorder(4, 4, 4, 4)
+        )
+        inputScroll.preferredSize = Dimension(700, 72)
         val sendButton = JButton("Send")
+        sendButton.font = Font(Font.SANS_SERIF, Font.BOLD, 13)
+        sendButton.background = Color(52, 120, 246)
+        sendButton.foreground = Color.WHITE
+        sendButton.border = BorderFactory.createEmptyBorder(8, 18, 8, 18)
+        sendButton.isFocusPainted = false
         sendButton.addActionListener { sendChat() }
-        val inputRow = JPanel(BorderLayout())
-        inputRow.add(input, BorderLayout.CENTER)
+        val inputRow = JPanel(BorderLayout(8, 0))
+        inputRow.border = BorderFactory.createEmptyBorder(10, 12, 10, 12)
+        inputRow.background = Color(245, 246, 250)
+        inputRow.add(inputScroll, BorderLayout.CENTER)
         inputRow.add(sendButton, BorderLayout.EAST)
 
-        // Model selector row: provider + model (loaded via models.list)
+        // Model selector row
         chatModelCombo.isEditable = true
-        chatModelCombo.prototypeDisplayValue = "gpt-5.1-codex"
+        chatModelCombo.prototypeDisplayValue = "deepseek-v4-flash"
         chatProviderCombo.addActionListener { refreshChatModels() }
         chatModelCombo.addActionListener { persistChatModelSelection() }
-        val modelRow = JPanel(FlowLayout(FlowLayout.LEFT, 8, 2))
-        modelRow.add(JLabel("provider:"))
+        val modelRow = JPanel(FlowLayout(FlowLayout.LEFT, 10, 6))
+        modelRow.background = Color(255, 255, 255)
+        modelRow.border = BorderFactory.createCompoundBorder(
+            BorderFactory.createMatteBorder(0, 0, 1, 0, Color(225, 229, 238)),
+            BorderFactory.createEmptyBorder(4, 12, 4, 12)
+        )
+        modelRow.add(styleLabel("Provider"))
         modelRow.add(chatProviderCombo)
-        modelRow.add(JLabel("model:"))
+        modelRow.add(styleLabel("Model"))
         modelRow.add(chatModelCombo)
-        modelRow.add(JLabel("reasoning:"))
+        modelRow.add(styleLabel("Reasoning"))
         modelRow.add(chatReasoningCombo)
 
         val split = JSplitPane(JSplitPane.VERTICAL_SPLIT, output, inputRow)
-        split.resizeWeight = 0.85
+        split.resizeWeight = 0.9
         split.setContinuousLayout(true)
-        split.dividerLocation = 430
+        split.dividerLocation = 480
         val panel = JPanel(BorderLayout())
         panel.add(modelRow, BorderLayout.NORTH)
         panel.add(split, BorderLayout.CENTER)
         return panel
+    }
+
+    private fun styleLabel(text: String): JLabel {
+        val l = JLabel(text)
+        l.font = Font(Font.SANS_SERIF, Font.BOLD, 11)
+        l.foreground = Color(110, 118, 132)
+        return l
     }
 
     private fun refreshChatModels() {
@@ -432,7 +464,7 @@ class AgentTab(private val ctx: AgentContext) {
         val context = conversation.toString().trim()
         val fullTask = if (context.isEmpty()) text else "$context\n\nNew instruction: $text"
         conversation.append("USER: ").append(text).append('\n')
-        val provider = chatProviderCombo.selectedItem?.toString() ?: "deepseek"
+        val provider = chatProviderCombo.selectedItem?.toString() ?: "shineshop"
         val model = chatModelCombo.editor.item?.toString()?.takeIf { it.isNotBlank() }
             ?: chatModelCombo.selectedItem?.toString() ?: ""
         val modelArg = Json.obj("provider" to provider, "model" to model)
@@ -526,20 +558,42 @@ class AgentTab(private val ctx: AgentContext) {
     fun appendChat(prefix: String, kind: String, text: String) {
         SwingUtilities.invokeLater {
             flushStream()
-            val color = when (kind) {
-                "tool" -> "#3366cc"
-                "result" -> "#3366cc"
-                "error" -> "#cc3333"
-                "done" -> "#339933"
-                "user" -> "#444444"
-                else -> "#888888"
+            when (kind) {
+                "user" -> appendUserBubble(text)
+                "tool" -> appendChip("tool", text, "#3366cc")
+                "done" -> appendChip("run", text, "#339933")
+                "error" -> appendChip("error", text, "#cc3333")
+                else -> appendAgentBubble(text)
             }
-            val escaped = escapeHtml(text)
-            val line = if (prefix.isBlank()) "<p><span style='color:$color'>$escaped</span></p>"
-            else "<p><b style='color:$color'>[$prefix]</b> <span style='color:$color'>$escaped</span></p>"
-            chatBody.append(line)
             renderChat()
         }
+    }
+
+    private fun appendUserBubble(text: String) {
+        val escaped = escapeHtml(text)
+        chatBody.append("<table width='100%' cellpadding='0' cellspacing='0' border='0'>")
+            .append("<tr><td align='right'><div style='background:#3b82f6;color:#fff;border-radius:12px 12px 2px 12px;padding:8px 12px;max-width:85%;text-align:left;display:inline-block;margin:4px 0;'>")
+            .append(escaped)
+            .append("</div></td></tr></table>")
+    }
+
+    private fun appendAgentBubble(text: String) {
+        val escaped = escapeHtml(text)
+        chatBody.append("<table width='100%' cellpadding='0' cellspacing='0' border='0'>")
+            .append("<tr><td><div style='background:#ffffff;border:1px solid #e3e7ef;border-radius:12px 12px 12px 2px;padding:8px 12px;max-width:85%;display:inline-block;margin:4px 0;'>")
+            .append(escaped)
+            .append("</div></td></tr></table>")
+    }
+
+    private fun appendChip(label: String, text: String, color: String) {
+        val escaped = escapeHtml(text)
+        chatBody.append("<div style='margin:3px 0 3px 4px;'><span style='font-size:11px;font-family:monospace;background:#f0f2f7;color:")
+            .append(color)
+            .append(";border:1px solid #e0e4ee;border-radius:8px;padding:2px 8px;'>[")
+            .append(escapeHtml(label))
+            .append("] ")
+            .append(escaped)
+            .append("</span></div>")
     }
 
     private fun escapeHtml(s: String): String =
@@ -550,7 +604,7 @@ class AgentTab(private val ctx: AgentContext) {
             if (!streaming) {
                 streaming = true
                 streamBuffer.clear()
-                chatBody.append("<p><b style='color:#339933'>[agent]</b> <span style='color:#888888'>")
+                chatBody.append("<table width='100%' cellpadding='0' cellspacing='0' border='0'><tr><td><div style='background:#ffffff;border:1px solid #e3e7ef;border-radius:12px 12px 12px 2px;padding:8px 12px;max-width:85%;display:inline-block;margin:4px 0;'>")
             }
             streamBuffer.append(chunk)
             renderChat()
@@ -560,16 +614,17 @@ class AgentTab(private val ctx: AgentContext) {
     private fun flushStream() {
         if (!streaming) return
         streaming = false
-        chatBody.append(escapeHtml(streamBuffer.toString())).append("</span></p>")
+        chatBody.append(escapeHtml(streamBuffer.toString())).append("</div></td></tr></table>")
         streamBuffer.clear()
     }
 
     private fun renderChat() {
-        if (streaming) {
-            chatOutput.text = "<html><body>${chatBody}${escapeHtml(streamBuffer.toString())}</body></html>"
+        val content = if (streaming) {
+            "${chatBody}${escapeHtml(streamBuffer.toString())}"
         } else {
-            chatOutput.text = "<html><body>${chatBody}</body></html>"
+            chatBody.toString()
         }
+        chatOutput.text = "<html><body style='background:#f5f6fa;font-family:Segoe UI,Tahoma,sans-serif;font-size:13px;'>$content</body></html>"
     }
 
     fun onSidecarConnected(version: String) {

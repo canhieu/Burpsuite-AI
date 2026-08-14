@@ -54,8 +54,11 @@ export async function createProviderRegistry(
   const providers: Record<string, ProviderAdapter> = {
     openai: new OpenAIAdapter(config, resolveToken),
     anthropic: new AnthropicAdapter(config, resolveToken),
-    deepseek: new DeepSeekAdapter(config),
     ollama: new OllamaAdapter(config),
+  }
+  // any other configured provider (deepseek, shineshop, custom...) is OpenAI-compatible
+  for (const name of Object.keys(config.providers ?? {})) {
+    if (!providers[name]) providers[name] = new OpenAICompatAdapter(name, config)
   }
   for (const [name, adapter] of Object.entries(providers)) {
     if (config.providers[name]?.enabled) adapters.set(name, adapter)
@@ -135,6 +138,7 @@ const DEFAULT_MODELS: Record<string, string[]> = {
   openai: ["gpt-5.1-codex", "gpt-5.1-codex-mini", "latest-codex"],
   anthropic: ["claude-sonnet-4-5", "claude-3-7-sonnet-latest", "claude-3-5-haiku-latest"],
   deepseek: ["deepseek-chat", "deepseek-reasoner"],
+  shineshop: ["deepseek-v4-flash", "gpt-5.5", "gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.6-terra", "gpt-image-2"],
   ollama: ["llama3.1", "qwen2.5", "mistral"],
 }
 
@@ -521,19 +525,20 @@ async function* openAiResponsesStream(
   yield { type: "done", data: { finishReason: "stop" } }
 }
 
-class DeepSeekAdapter implements ProviderAdapter {
-  readonly provider = "deepseek"
+class OpenAICompatAdapter implements ProviderAdapter {
+  readonly provider: string
   readonly baseUrl: string
   readonly hasKey: boolean
 
-  constructor(private config: SidecarConfig) {
-    const c = config.providers["deepseek"]
-    this.baseUrl = c?.baseUrl ?? "https://api.deepseek.com/v1"
-    this.hasKey = !!providerApiKey(config, "deepseek")
+  constructor(name: string, private config: SidecarConfig) {
+    this.provider = name
+    const c = config.providers[name]
+    this.baseUrl = c?.baseUrl ?? ""
+    this.hasKey = !!providerApiKey(config, name)
   }
 
   private get key(): string | undefined {
-    return providerApiKey(this.config, "deepseek")
+    return providerApiKey(this.config, this.provider)
   }
 
   async *stream(messages: ChatMessage[], model: string, opts?: StreamOptions): AsyncGenerator<ProviderEvent> {
@@ -545,11 +550,13 @@ class DeepSeekAdapter implements ProviderAdapter {
       const res = await fetch(`${this.baseUrl}/models`, { headers: { Authorization: `Bearer ${this.key ?? ""}` } })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const json = (await res.json()) as { data?: Array<{ id: string }> }
-      return (json.data ?? []).map((m) => modelInfo(m.id, "deepseek"))
+      return (json.data ?? []).map((m) => modelInfo(m.id, this.provider))
     } catch {
-      const extra = this.config.models.deepseek?.extra ?? []
-      const def = this.config.models.deepseek?.default ?? DEFAULT_MODELS.deepseek![0]
-      return [def, ...extra, ...DEFAULT_MODELS.deepseek!.filter((m) => m !== def)].map((m) => modelInfo(m, "deepseek"))
+      const cfgModels = (this.config.models as Record<string, { default?: string; extra?: string[] } | undefined>)[this.provider]
+      const extra = cfgModels?.extra ?? []
+      const def = cfgModels?.default ?? DEFAULT_MODELS[this.provider]?.[0]
+      const defaults = DEFAULT_MODELS[this.provider] ?? []
+      return [def, ...extra, ...defaults.filter((m) => m !== def)].filter((m): m is string => !!m).map((m) => modelInfo(m, this.provider))
     }
   }
 
