@@ -109,8 +109,12 @@ async function main(): Promise<void> {
   services.log("info", `enabled providers: ${services.registry.all().map((p) => p.provider).join(", ") || "none"}`)
   services.log("info", `auth: ${config.authToken === "change-me" ? "default token (set CONFIG_PATH)" : "configured"}`)
 
+  // If spawned by the Burp extension, dial back to it (the extension is the WS server).
+  rpc.connectToExtension()
+
   const shutdown = (signal: string) => {
     services.log("info", `received ${signal}, shutting down`)
+    rpc.stop()
     rpc.close()
     server.close(() => process.exit(0))
     setTimeout(() => process.exit(0), 2000).unref()

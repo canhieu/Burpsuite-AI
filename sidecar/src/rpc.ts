@@ -347,6 +347,95 @@ export class RpcServer {
   close(): void {
     for (const ws of this.wss.clients) ws.close(1001, "server shutdown")
     this.wss.close()
+    this.connectingWs?.close(1001, "server shutdown")
+  }
+
+  /**
+   * Connect OUT to an extension's WS server (the extension is the WS server;
+   * the sidecar is spawned by the extension and dials back to it).
+   * Env: BURP_AGENT_WS_URL, BURP_AGENT_TOKEN, BURP_AGENT_NONCE, BURP_AGENT_PROJECT_ID.
+   * Reconnects with backoff until stopped.
+   */
+  connectToExtension(opts?: { maxAttempts?: number; backoffMs?: number }): void {
+    const url = process.env["BURP_AGENT_WS_URL"]
+    const token = process.env["BURP_AGENT_TOKEN"]
+    const nonce = process.env["BURP_AGENT_NONCE"]
+    const projectId = process.env["BURP_AGENT_PROJECT_ID"]
+    if (!url || !token) {
+      this.log.info("BURP_AGENT_WS_URL not set; running standalone (no extension)")
+      return
+    }
+    const maxAttempts = opts?.maxAttempts ?? 3
+    const backoffMs = opts?.backoffMs ?? 1500
+    this.log.info(`connecting out to extension ws ${url}`)
+    this.connectLoop(url, { token, nonce, projectId }, maxAttempts, backoffMs)
+  }
+
+  private connectingWs: WebSocket | null = null
+  private connectStop = false
+
+  private connectLoop(
+    url: string,
+    handshake: { token: string; nonce?: string; projectId?: string },
+    maxAttempts: number,
+    backoffMs: number,
+  ): void {
+    if (this.connectStop) return
+    const ws = new WebSocket(url)
+    this.connectingWs = ws
+    const self = this
+    ws.on("open", () => {
+      this.log.info("connected to extension; sending handshake")
+      this.registerOutbound(ws)
+      ws.send(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          method: "handshake.hello",
+          params: {
+            projectId: handshake.projectId ?? "unknown",
+            nonce: handshake.nonce ?? "n",
+            token: handshake.token,
+          },
+        } satisfies RpcNotification),
+      )
+    })
+    const scheduleRetry = (attempt: number, reason: string) => {
+      this.log.warn(`extension connection failed (${reason}); attempt ${attempt}/${maxAttempts}`)
+      if (attempt >= maxAttempts || this.connectStop) return
+      setTimeout(() => {
+        if (!this.connectStop) this.connectLoop(url, handshake, maxAttempts, backoffMs)
+      }, backoffMs * attempt)
+    }
+    ws.on("close", () => {
+      this.log.info("extension ws closed")
+      if (this.clientSocket === ws) this.clientSocket = null
+      this.rejectPending(new Error("extension disconnected"))
+      scheduleRetry(1, "closed")
+    })
+    ws.on("error", (err) => {
+      this.log.debug(`extension ws error: ${err.message}`)
+      scheduleRetry(1, err.message)
+    })
+  }
+
+  /** Treat an outbound extension socket like an inbound client: parse+dispatch, and act as our request target. */
+  private registerOutbound(ws: WebSocket): void {
+    const session: Session = { authed: false, ws }
+    this.sessions.set(ws, session)
+    this.clientSocket = ws
+    // The extension will reply with agent.hello; then it is authed. Mark authed once handshake sent.
+    // We send handshake from the client side, so assume authed after a short grace; the extension
+    // enforces its own token check and closes us on mismatch.
+    session.authed = true
+    ws.on("message", (data) => {
+      const raw = Array.isArray(data) ? Buffer.concat(data) : Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer)
+      void this.onMessage(ws, raw)
+    })
+  }
+
+  stop(): void {
+    this.connectStop = true
+    this.connectingWs?.close(1001, "stopped")
   }
 }
 
