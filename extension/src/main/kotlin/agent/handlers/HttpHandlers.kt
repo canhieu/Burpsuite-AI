@@ -68,6 +68,7 @@ class HttpHandlers(private val ctx: AgentContext) : RpcHandler {
         raw = ctx.authContexts.applyTo(raw, ctx.authContexts.active())
         val targetUrl = HttpBridge.absoluteUrl(raw, service)
         val method = HttpBridge.methodOf(raw)
+        ctx.autoScopeHost(targetUrl)
 
         when (val decision = ctx.policy.canSend(targetUrl, method)) {
             is SendDecision.Deny -> throw RpcFailure(403, decision.reason, Json.obj("reason" to decision.reason))

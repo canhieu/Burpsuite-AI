@@ -32,12 +32,28 @@ class AgentContext(val api: MontoyaApi) {
     val policy = Policy(
         isInScope = { url ->
             try {
-                api.scope().isInScope(url)
+                if (api.scope().isInScope(url)) return@Policy true
+                // auto-allow hosts the agent already targeted this session
+                val host = Policy.domainOf(url) ?: return@Policy false
+                autoScopedHosts.contains(host.lowercase()) && hostNotBlocked(host)
             } catch (e: Exception) {
                 false
             }
         }
     )
+
+    private val autoScopedHosts = ConcurrentHashMap.newKeySet<String>()
+
+    private fun hostNotBlocked(host: String): Boolean = Policy.DEFAULT_BLOCKLIST.none { b ->
+        host.equals(b, true) || host.endsWith(".$b")
+    }
+
+    /** Mark a host as reachable for the agent session (used when it isn't in Burp's configured scope). */
+    fun autoScopeHost(url: String) {
+        val host = Policy.domainOf(url) ?: return
+        autoScopedHosts.add(host.lowercase())
+        runCatching { api.scope().includeInScope(url) }
+    }
 
     val audit = AuditLog()
     val messageStore = MessageStore()

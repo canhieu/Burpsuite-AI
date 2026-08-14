@@ -3,6 +3,7 @@ import type { SkillManifest, ToolCall } from "../types.js"
 import type { PlanItem, RunConfig, ToolCallFrame } from "./types.js"
 import type { FindingDraft, ExecutorStatus } from "./types.js"
 import type { ToolBridge } from "./rpc-bridge.js"
+import { TOOL_SCHEMA } from "./tool-schema.js"
 import { BudgetTracker, Semaphore } from "./budget.js"
 import type { PauseGate } from "./pause-gate.js"
 
@@ -294,11 +295,18 @@ function buildSystemPrompt(ctx: ExecutorContext): string {
   if (ctx.config.scope?.length) lines.push(`Scope: ${ctx.config.scope.join(", ")}`)
   lines.push("You may only perform authorized testing within the given scope.")
   lines.push('To invoke a tool, respond with exactly one JSON object: {"tool_call": {"name": "<tool>", "arguments": {}}}.')
+  lines.push(TOOL_SCHEMA)
   lines.push(
-    'When done, respond with {"conclusion": "..."} or {"conclusion": "...", "finding": {"title": "...", "vulnClass": "...", "severity": "low|medium|high|critical", "confidence": "tentative|medium|high|certain"}}.',
+    'When the objective is FULLY achieved, respond with {"conclusion": "..."} or {"conclusion": "...", "finding": {"title": "...", "vulnClass": "...", "severity": "low|medium|high|critical", "confidence": "tentative|medium|high|certain"}}.',
   )
   lines.push(
     "Tools are grouped by prefix, e.g. history.search, http.send, payload.build, finding.create, scan.crawl, oob.session.",
+  )
+  lines.push(
+    "You MUST keep calling tools step by step until the objective is fully achieved. NEVER conclude after a single request.",
+  )
+  lines.push(
+    "After every tool result, study it and immediately plan+execute the next tool call. If a request errored, debug and retry with a corrected payload.",
   )
   lines.push("Tool results are redacted; never reveal or echo secrets. Never retry the same idempotencyKey.")
   return lines.join("\n")

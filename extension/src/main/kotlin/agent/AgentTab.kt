@@ -75,6 +75,9 @@ class AgentTab(private val ctx: AgentContext) {
     private val streamBuffer = StringBuilder()
     private var streaming = false
 
+    // conversation memory across runs: user asks + observed tool activity
+    private val conversation = StringBuilder()
+
     fun component(): JComponent = root
 
     init {
@@ -425,8 +428,12 @@ class AgentTab(private val ctx: AgentContext) {
             appendChat("system", "error", "rpc server not ready")
             return
         }
+        // carry prior context into the next run so the agent is not memoryless
+        val context = conversation.toString().trim()
+        val fullTask = if (context.isEmpty()) text else "$context\n\nNew instruction: $text"
+        conversation.append("USER: ").append(text).append('\n')
         val params = Json.obj(
-            "task" to text,
+            "task" to fullTask,
             "mode" to "smart",
             "models" to Json.obj(
                 "planner" to (chatProviderCombo.selectedItem?.toString() ?: "deepseek"),
@@ -608,12 +615,14 @@ class AgentTab(private val ctx: AgentContext) {
             "tool.call" -> {
                 val name = params.get("toolCall")?.takeIf { !it.isJsonNull && it.isJsonObject }?.asJsonObject?.get("name")?.asString ?: "?"
                 appendChat("tool", "tool", name)
+                conversation.append("TOOL_CALL: ").append(name).append('\n')
             }
             "run.progress" -> {
                 val msg = params.get("message")?.takeIf { !it.isJsonNull }?.asString ?: ""
                 val done = params.get("done")?.asBoolean == true
                 if (done) {
                     SwingUtilities.invokeLater { flushStream() }
+                    conversation.append("RUN: ").append(msg).append('\n')
                     if (msg.isNotEmpty() && !msg.startsWith("error")) appendChat("run", "done", msg)
                     else if (msg.startsWith("error")) appendChat("run", "error", msg)
                 } else if (msg.isNotEmpty()) {
